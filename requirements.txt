@@ -1,3 +1,5 @@
+colorlog==6.12.0
+docling==2.126.0
 fastapi==0.128.0
 httpx==0.28.1
 langchain-community==0.3.27
