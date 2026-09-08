@@ -82,6 +82,33 @@ class SourceRef:
 
 
 @dataclass(slots=True)
+class SessionSummary:
+    """Java 已保存并可供 ContextBuilder 使用的会话摘要。"""
+
+    version: int
+    text: str
+    through_message_id: str | None = None
+    source_refs: list[SourceRef] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if isinstance(self.version, bool) or not isinstance(self.version, int):
+            raise TypeError("summary.version 必须是整数")
+        if self.version < 0:
+            raise ValueError("summary.version 不能小于 0")
+        self.text = _required_text(self.text, "summary.text")
+        self.through_message_id = _optional_text(
+            self.through_message_id,
+            "summary.through_message_id",
+        )
+        if not isinstance(self.source_refs, list):
+            raise TypeError("summary.source_refs 必须是 list")
+        refs = list(self.source_refs)
+        if any(not isinstance(ref, SourceRef) for ref in refs):
+            raise TypeError("summary.source_refs 只能包含 SourceRef")
+        self.source_refs = refs
+
+
+@dataclass(slots=True)
 class ContextUnit:
     """Gather、Select、Structure 和 Compact 共享的最小信息单元。"""
 
@@ -221,6 +248,7 @@ __all__ = [
     "ContextUnit",
     "ContextUnitType",
     "Fidelity",
+    "SessionSummary",
     "SourceKind",
     "SourceRef",
 ]
