@@ -83,7 +83,7 @@ class SourceRef:
 
 @dataclass(slots=True)
 class ContextUnit:
-    """Gather、Select、Compress 和 Structure 共享的最小信息单元。"""
+    """Gather、Select、Structure 和 Compact 共享的最小信息单元。"""
 
     id: str
     type: ContextUnitType
