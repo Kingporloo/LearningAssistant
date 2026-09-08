@@ -80,12 +80,17 @@ class MemoryService:
         operation_id: str,
         memory_type: MemoryType = "semantic",
         memory_id: str | None = None,
+        importance: float | None = None,
     ) -> dict[str, Any]:
         content = content.strip()
         if memory_type not in MEMORY_TYPES:
             return _error("memory_type 必须是 working、semantic 或 episodic。")
         if not content:
             return _error("记忆内容不能为空。")
+        if memory_id is not None:
+            memory_id = memory_id.strip()
+            if not memory_id:
+                return _error("memory_id 不能为空字符串。")
         if memory_type == "working":
             key = memory_id or f"work-{uuid4().hex}"
             self.working.set(context.user_id, context.session_id, key, content)
@@ -95,6 +100,13 @@ class MemoryService:
                 "memory_type": "working",
                 "message": "工作记忆已保存到当前会话。",
             }
+        if (
+            isinstance(importance, bool)
+            or not isinstance(importance, (int, float))
+            or not 0 <= importance <= 1
+        ):
+            return _error("semantic 和 episodic 记忆的 importance 必须是 0 到 1 的数值。")
+        importance = float(importance)
         if not context.message_id:
             return _error("缺少来源 message_id，不能写入长期记忆。")
 
@@ -109,10 +121,12 @@ class MemoryService:
                 content,
                 source_session_id=context.session_id,
                 source_message_id=context.message_id,
+                include_event_time=memory_id is None,
             )
         data.update({
             "memory_type": memory_type,
             "memory_id": memory_id,
+            "importance": importance,
             "vector": self.embeddings.embed_query(content),
         })
         try:

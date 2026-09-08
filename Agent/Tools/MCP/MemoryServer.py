@@ -8,7 +8,7 @@ import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import Context, FastMCP
+from pydantic import Field
 
 from Agent.Interface.BackendClient import RunContext
 from Agent.Tools.Memory.memory import MemoryService
@@ -130,11 +131,14 @@ async def memory_store(
     ctx: Context,
     memory_type: Literal["working", "semantic", "episodic"] = "semantic",
     memory_id: str | None = None,
+    importance: Annotated[float | None, Field(ge=0, le=1)] = None,
 ) -> dict[str, Any]:
     """按分类保存记忆。
 
     working 用于当前会话的临时结论和中间状态；semantic 用于稳定事实与偏好；
-    episodic 用于重要经历。传入 memory_id 可更新同一工作记忆或纠正长期记忆。
+    episodic 用于重要经历。semantic 和 episodic 必须提供 0 到 1 的 importance，
+    数值越高表示未来复用价值越高，可按重要程度使用 0.1、0.2 等小数。working
+    不需要 importance。传入 memory_id 可更新同一工作记忆或明确纠正长期记忆。
     """
     context = _run_context(ctx)
     return await _get_service().store(
@@ -143,6 +147,7 @@ async def memory_store(
         operation_id=f"mcp:{context.request_id}:{ctx.request_id}",
         memory_type=memory_type,
         memory_id=memory_id,
+        importance=importance,
     )
 
 
