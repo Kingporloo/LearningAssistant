@@ -198,6 +198,31 @@ class BackendClient:
             write=True,
         )
 
+    async def context_summary_store(
+        self,
+        context: RunContext,
+        *,
+        operation_id: str,
+        base_version: int,
+        history_cursor: str | None,
+        through_message_id: str | None,
+        source_refs: list[dict[str, Any]],
+        text: str,
+    ) -> dict[str, Any]:
+        return await self._post(
+            "/internal/storage/context/summary",
+            context,
+            {
+                "operation_id": operation_id,
+                "base_version": base_version,
+                "history_cursor": history_cursor,
+                "through_message_id": through_message_id,
+                "source_refs": source_refs,
+                "text": text,
+            },
+            write=True,
+        )
+
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
