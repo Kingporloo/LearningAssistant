@@ -1,0 +1,116 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    system-ui, sans-serif;
+  --color-brand-50: oklch(0.97 0.02 265);
+  --color-brand-100: oklch(0.94 0.03 265);
+  --color-brand-200: oklch(0.88 0.06 265);
+  --color-brand-300: oklch(0.8 0.09 265);
+  --color-brand-400: oklch(0.7 0.13 265);
+  --color-brand-500: oklch(0.62 0.17 265);
+  --color-brand-600: oklch(0.55 0.2 265);
+  --color-brand-700: oklch(0.48 0.19 265);
+  --color-brand-800: oklch(0.4 0.15 265);
+  --color-brand-900: oklch(0.33 0.12 265);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-100 text-slate-800 antialiased;
+  font-family: var(--font-sans);
+}
+
+/* 滚动条美化 */
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-slate-300;
+}
+*::-webkit-scrollbar-thumb:hover {
+  @apply bg-slate-400;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Markdown 内容基础排版（配合 react-markdown 输出） */
+.markdown-body {
+  @apply text-[15px] leading-7 text-slate-800;
+}
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  @apply mb-3 mt-5 font-semibold text-slate-900;
+}
+.markdown-body h1 {
+  @apply text-xl;
+}
+.markdown-body h2 {
+  @apply text-lg;
+}
+.markdown-body h3 {
+  @apply text-base;
+}
+.markdown-body p {
+  @apply my-3;
+}
+.markdown-body ul {
+  @apply my-3 list-disc space-y-1 pl-6;
+}
+.markdown-body ol {
+  @apply my-3 list-decimal space-y-1 pl-6;
+}
+.markdown-body li > p {
+  @apply my-1;
+}
+.markdown-body a {
+  @apply font-medium text-brand-600 underline decoration-brand-300 underline-offset-2 hover:text-brand-700;
+}
+.markdown-body blockquote {
+  @apply my-3 border-l-4 border-brand-200 bg-brand-50 px-4 py-2 text-slate-600;
+}
+.markdown-body code {
+  @apply rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[13px] text-rose-600;
+}
+.markdown-body pre {
+  @apply my-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-[13px] leading-6 text-slate-100;
+}
+.markdown-body pre code {
+  @apply bg-transparent p-0 text-slate-100;
+}
+.markdown-body table {
+  @apply my-3 w-full border-collapse text-sm;
+}
+.markdown-body th {
+  @apply border border-slate-200 bg-slate-50 px-3 py-1.5 text-left font-semibold;
+}
+.markdown-body td {
+  @apply border border-slate-200 px-3 py-1.5 align-top;
+}
+.markdown-body hr {
+  @apply my-4 border-slate-200;
+}
+.markdown-body strong {
+  @apply font-semibold text-slate-900;
+}
+
+/* 流式输出光标 */
+.stream-cursor::after {
+  content: "▌";
+  @apply ml-0.5 animate-pulse text-brand-500;
+}
