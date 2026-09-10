@@ -7,6 +7,7 @@ import json
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from functools import lru_cache
 from typing import Annotated
 
@@ -15,9 +16,15 @@ from fastapi.responses import StreamingResponse
 
 from Agent.AgentLoop import AgentLoop
 from Agent.Assistant import Assistant
-from Agent.Interface.AgentSchemas import AgentRunRequest
+from Agent.Context.ContextBuider import ContextBuildResult, ContextBuilder
+from Agent.Interface.AgentSchemas import (
+    AgentCompactRequest,
+    AgentRunRequest,
+    AgentSessionRequest,
+)
 from Agent.Interface.BackendClient import BackendClient, RunContext
 from Agent.Loop.Models import AgentEvent, AgentRunInput
+from Agent.SystemPrompt import SYSTEM_PROMPT
 from Agent.Tools.MCP.MCPClient import MCPClient
 from Agent.Tools.RAG.dataPraperation import EmbeddingModel
 
@@ -38,6 +45,34 @@ app = FastAPI(
 )
 
 
+def require_trusted_user(
+    payload: AgentSessionRequest,
+    authorization: Annotated[str | None, Header()] = None,
+    x_user_id: Annotated[str | None, Header(alias="X-User-ID")] = None,
+) -> str:
+    _require_internal_token(authorization)
+    _require_matching_header("X-User-ID", x_user_id, payload.user_id)
+    return payload.user_id
+
+
+def require_trusted_compact(
+    payload: AgentCompactRequest,
+    authorization: Annotated[str | None, Header()] = None,
+    x_user_id: Annotated[str | None, Header(alias="X-User-ID")] = None,
+    x_session_id: Annotated[str | None, Header(alias="X-Session-ID")] = None,
+    x_request_id: Annotated[str | None, Header(alias="X-Request-ID")] = None,
+) -> RunContext:
+    _require_internal_token(authorization)
+    _require_matching_header("X-User-ID", x_user_id, payload.user_id)
+    _require_matching_header("X-Session-ID", x_session_id, payload.session_id)
+    _require_matching_header("X-Request-ID", x_request_id, payload.request_id)
+    return RunContext(
+        user_id=payload.user_id,
+        session_id=payload.session_id,
+        request_id=payload.request_id,
+    )
+
+
 def require_trusted_run(
     payload: AgentRunRequest,
     authorization: Annotated[str | None, Header()] = None,
@@ -48,11 +83,7 @@ def require_trusted_run(
 ) -> RunContext:
     """只确认内部调用方及运行标识；用户登录态和会话归属由 Java 负责。"""
 
-    token = os.getenv("PYTHON_INTERNAL_TOKEN", "")
-    if not token:
-        raise HTTPException(status_code=503, detail="PYTHON_INTERNAL_TOKEN 未配置")
-    if not hmac.compare_digest(authorization or "", f"Bearer {token}"):
-        raise HTTPException(status_code=401, detail="内部服务认证失败")
+    _require_internal_token(authorization)
 
     expected = {
         "X-User-ID": payload.user_id,
@@ -67,10 +98,7 @@ def require_trusted_run(
         "X-Message-ID": x_message_id,
     }
     for name, value in actual.items():
-        if value is None:
-            raise HTTPException(status_code=400, detail=f"缺少 {name} 请求头")
-        if not hmac.compare_digest(value, expected[name]):
-            raise HTTPException(status_code=400, detail=f"{name} 与请求体不一致")
+        _require_matching_header(name, value, expected[name])
     return RunContext(
         user_id=payload.user_id,
         session_id=payload.session_id,
@@ -98,6 +126,36 @@ def get_agent_loop(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+def get_compact_builder(
+    payload: AgentCompactRequest,
+    _context: Annotated[RunContext, Depends(require_trusted_compact)],
+) -> ContextBuilder:
+    try:
+        assistant = _assistant()
+        return ContextBuilder(
+            config=payload.agent_config.to_context_config(),
+            mcp_client=None,
+            count_tokens=assistant.count_tokens,
+            count_request=assistant.count_request,
+            embed_texts=_embedding_model().embed_documents,
+            summary_model=assistant.model,
+            backend_client=_backend_client(),
+        )
+    except (TypeError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/internal/agent/sessions", status_code=201)
+def create_agent_session(
+    payload: AgentSessionRequest,
+    user_id: Annotated[str, Depends(require_trusted_user)],
+) -> dict[str, str]:
+    return {
+        "user_id": user_id,
+        "session_id": create_session_id(user_id),
+    }
+
+
 @app.post("/internal/agent/runs")
 async def run_agent(
     payload: AgentRunRequest,
@@ -122,6 +180,26 @@ async def run_agent(
     )
 
 
+@app.post("/internal/agent/context/compact")
+async def compact_agent_context(
+    payload: AgentCompactRequest,
+    context: Annotated[RunContext, Depends(require_trusted_compact)],
+    builder: Annotated[ContextBuilder, Depends(get_compact_builder)],
+) -> dict[str, object]:
+    try:
+        state = payload.to_context_state(
+            context,
+            builder.count_tokens,
+            system_prompt=SYSTEM_PROMPT,
+        )
+        result = await builder.compact_context(state)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return _compact_response(result)
+
+
 async def _event_stream(
     agent_loop: AgentLoop,
     run_input: AgentRunInput,
@@ -141,6 +219,91 @@ def encode_sse(event: AgentEvent) -> str:
         separators=(",", ":"),
     )
     return f"event: {event.type}\ndata: {data}\n\n"
+
+
+def create_session_id(user_id: str, now: datetime | None = None) -> str:
+    timestamp = now or datetime.now()
+    return f"session_{timestamp.strftime('%Y%m%d_%H%M%S')}_{user_id}"
+
+
+def _compact_response(result: ContextBuildResult) -> dict[str, object]:
+    attempt = result.compact_result
+    if result.summary_save_status == "saved":
+        status = "saved"
+    elif result.summary_save_status == "unknown":
+        status = "unknown"
+    elif result.summary_save_status == "failed":
+        status = "failed"
+    elif attempt is not None and attempt.status == "skipped":
+        status = "skipped"
+    else:
+        status = "failed"
+
+    return {
+        "status": status,
+        "trigger": "manual",
+        "reason": result.reason or (attempt.reason if attempt is not None else None),
+        "before_tokens": result.before_compact_tokens,
+        "after_tokens": result.input_tokens,
+        "compact_trigger_tokens": result.budget.compact_trigger_tokens,
+        "below_trigger": not result.budget.reaches_compact_threshold(
+            result.input_tokens
+        ),
+        "summary_save_status": result.summary_save_status,
+        "session_summary": _summary_data(result.session_summary),
+        "compact": (
+            {
+                "status": attempt.status,
+                "replaced_tokens": attempt.replaced_tokens,
+                "input_tokens": attempt.input_tokens,
+                "output_tokens": attempt.output_tokens,
+                "reason": attempt.reason,
+                "usage": attempt.usage_metadata,
+            }
+            if attempt is not None
+            else None
+        ),
+    }
+
+
+def _summary_data(summary) -> dict[str, object] | None:
+    if summary is None:
+        return None
+    return {
+        "version": summary.version,
+        "text": summary.text,
+        "through_message_id": summary.through_message_id,
+        "source_refs": [
+            {
+                "kind": ref.kind.value,
+                "ref_id": ref.ref_id,
+                "session_id": ref.session_id,
+                "version": ref.version,
+                "exists": ref.exists,
+                "metadata": dict(ref.metadata),
+            }
+            for ref in summary.source_refs
+        ],
+    }
+
+
+def _require_internal_token(authorization: str | None) -> None:
+    token = os.getenv("PYTHON_INTERNAL_TOKEN", "")
+    if not token:
+        raise HTTPException(status_code=503, detail="PYTHON_INTERNAL_TOKEN 未配置")
+    if not hmac.compare_digest(authorization or "", f"Bearer {token}"):
+        raise HTTPException(status_code=401, detail="内部服务认证失败")
+
+
+def _require_matching_header(
+    name: str,
+    actual: str | None,
+    expected: str,
+) -> None:
+    if actual is None:
+        raise HTTPException(status_code=400, detail=f"缺少 {name} 请求头")
+    if not hmac.compare_digest(actual, expected):
+        raise HTTPException(status_code=400, detail=f"{name} 与请求体不一致")
 
 
 @lru_cache(maxsize=1)
@@ -165,8 +328,14 @@ def _embedding_model() -> EmbeddingModel:
 
 __all__ = [
     "app",
+    "compact_agent_context",
+    "create_agent_session",
+    "create_session_id",
     "encode_sse",
     "get_agent_loop",
+    "get_compact_builder",
+    "require_trusted_compact",
     "require_trusted_run",
+    "require_trusted_user",
     "run_agent",
 ]

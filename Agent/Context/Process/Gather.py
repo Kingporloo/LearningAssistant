@@ -54,6 +54,7 @@ async def gather(
     session_ledger: SessionLedger | None = None,
     keep_recent_turns: int = 5,
     cached_memory: MemoryRecall | None = None,
+    recall_memory: bool = True,
 ) -> GatherResult:
     """收集上下文，不执行选择、压缩、持久化或模型生成。"""
 
@@ -114,12 +115,16 @@ async def gather(
             compactable.append(unit)
 
     mandatory.append(current_query)
-    memory = await gather_memory(
-        current_query,
-        mcp_client,
-        count_tokens,
-        session_ledger=session_ledger,
-        cached=cached_memory,
+    memory = (
+        await gather_memory(
+            current_query,
+            mcp_client,
+            count_tokens,
+            session_ledger=session_ledger,
+            cached=cached_memory,
+        )
+        if recall_memory
+        else MemoryRecall(reused=True)
     )
     candidates.extend(memory.units)
     compactable.extend(memory.units)

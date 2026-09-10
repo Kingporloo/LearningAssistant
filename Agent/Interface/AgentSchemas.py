@@ -9,6 +9,7 @@ from typing import Annotated, Any, Literal
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from Agent.Context.ContextBuider import ContextState
 from Agent.Context.Schemas.Config import ContextConfig
 from Agent.Context.Schemas.ContextUnit import (
     Authority,
@@ -37,6 +38,10 @@ ToolOutcome = Literal["completed", "error", "unknown", "skipped"]
 
 class _RequestModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class AgentSessionRequest(_RequestModel):
+    user_id: NonEmptyString
 
 
 class AgentConfigRequest(_RequestModel):
@@ -216,16 +221,12 @@ class AgentRunRequest(_RequestModel):
         context: RunContext,
         count_tokens: Callable[[str], int],
     ) -> AgentRunInput:
-        dialogue_turns = [
-            _dialogue_turn(turn, context, count_tokens)
-            for turn in self.recent_history
-        ]
-        execution: list[BaseMessage] = []
-        execution_units: list[ContextUnit] = []
-        for group in self.execution_history:
-            messages, units = _execution_group(group, context, count_tokens)
-            execution.extend(messages)
-            execution_units.extend(units)
+        dialogue_turns, execution, execution_units = _context_snapshot(
+            self.recent_history,
+            self.execution_history,
+            context,
+            count_tokens,
+        )
         return AgentRunInput(
             run_context=context,
             message=self.message,
@@ -244,6 +245,118 @@ class AgentRunRequest(_RequestModel):
             ),
             history_cursor=self.history_cursor,
         )
+
+
+class AgentCompactRequest(_RequestModel):
+    user_id: NonEmptyString
+    session_id: NonEmptyString
+    request_id: NonEmptyString
+    recent_history: list[DialogueTurnSnapshot] = Field(default_factory=list)
+    execution_history: list[ExecutionGroupSnapshot] = Field(default_factory=list)
+    history_cursor: NonEmptyString | None = None
+    session_summary: SessionSummarySnapshot | None = None
+    session_ledger: SessionLedgerSnapshot | None = None
+    agent_config: AgentConfigRequest
+
+    @model_validator(mode="after")
+    def validate_stable_ids(self) -> "AgentCompactRequest":
+        _validate_history_ids(self.recent_history, self.execution_history)
+        return self
+
+    def to_context_state(
+        self,
+        context: RunContext,
+        count_tokens: Callable[[str], int],
+        *,
+        system_prompt: str,
+    ) -> ContextState:
+        dialogue_turns, execution, execution_units = _context_snapshot(
+            self.recent_history,
+            self.execution_history,
+            context,
+            count_tokens,
+        )
+        control_text = "用户请求手动压缩当前会话上下文。"
+        control_id = f"manual-compact:{context.request_id}"
+        current_query = ContextUnit(
+            id=control_id,
+            type=ContextUnitType.DIALOGUE,
+            text=control_text,
+            source_ref=SourceRef(
+                kind=SourceKind.DERIVED,
+                ref_id=control_id,
+                session_id=context.session_id,
+            ),
+            token_count=_count(control_text, count_tokens),
+            user_id=context.user_id,
+            session_id=context.session_id,
+            authority=Authority.USER,
+            fidelity=Fidelity.EXACT,
+        )
+        return ContextState(
+            run_context=context,
+            current_query=current_query,
+            system_prompt=system_prompt,
+            dialogue_turns=dialogue_turns,
+            execution_units=execution_units,
+            execution=execution,
+            session_summary=(
+                self.session_summary.to_session_summary()
+                if self.session_summary is not None
+                else None
+            ),
+            session_ledger=(
+                self.session_ledger.to_session_ledger()
+                if self.session_ledger is not None
+                else None
+            ),
+            history_cursor=self.history_cursor,
+            compact_operation_id=f"compact:{context.request_id}",
+            recall_memory=False,
+        )
+
+
+def _context_snapshot(
+    dialogue: list[DialogueTurnSnapshot],
+    groups: list[ExecutionGroupSnapshot],
+    context: RunContext,
+    count_tokens: Callable[[str], int],
+) -> tuple[
+    list[tuple[ContextUnit, ContextUnit]],
+    list[BaseMessage],
+    list[ContextUnit],
+]:
+    dialogue_turns = [
+        _dialogue_turn(turn, context, count_tokens)
+        for turn in dialogue
+    ]
+    execution: list[BaseMessage] = []
+    execution_units: list[ContextUnit] = []
+    for group in groups:
+        messages, units = _execution_group(group, context, count_tokens)
+        execution.extend(messages)
+        execution_units.extend(units)
+    return dialogue_turns, execution, execution_units
+
+
+def _validate_history_ids(
+    dialogue: list[DialogueTurnSnapshot],
+    groups: list[ExecutionGroupSnapshot],
+) -> None:
+    message_ids = [
+        message.message_id
+        for turn in dialogue
+        for message in (turn.user_message, turn.assistant_message)
+    ]
+    if len(message_ids) != len(set(message_ids)):
+        raise ValueError("recent_history 的 message_id 不能重复")
+
+    group_ids = [group.group_id for group in groups]
+    if len(group_ids) != len(set(group_ids)):
+        raise ValueError("execution_history 的 group_id 不能重复")
+    call_ids = [call.tool_call_id for group in groups for call in group.tool_calls]
+    if len(call_ids) != len(set(call_ids)):
+        raise ValueError("execution_history 的 tool_call_id 必须全局唯一")
 
 
 def _dialogue_turn(
@@ -370,8 +483,10 @@ def _count(text: str, count_tokens: Callable[[str], int]) -> int:
 
 
 __all__ = [
+    "AgentCompactRequest",
     "AgentConfigRequest",
     "AgentRunRequest",
+    "AgentSessionRequest",
     "DialogueTurnSnapshot",
     "ExecutionGroupSnapshot",
     "LedgerEntrySnapshot",

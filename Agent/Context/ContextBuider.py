@@ -60,6 +60,7 @@ class ContextState:
     react_template: str = DEFAULT_REACT_TEMPLATE
     history_cursor: str | None = None
     compact_operation_id: str | None = None
+    recall_memory: bool = True
 
     def __post_init__(self) -> None:
         if self.current_query.user_id != self.run_context.user_id:
@@ -186,6 +187,7 @@ class ContextBuilder:
             session_ledger=state.session_ledger,
             keep_recent_turns=self.config.keep_recent_turns,
             cached_memory=state.cached_memory,
+            recall_memory=state.recall_memory,
         )
         budget = self._budget(state, gathered.mandatory)
         selection = select(
