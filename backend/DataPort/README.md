@@ -8,7 +8,7 @@ Controller。`backend/Interface` 负责认证、开发期会话校验和 JSON �
 
 | 存储 | 用途 |
 |---|---|
-| MySQL | 长期记忆权威正文、来源、importance、状态、写操作幂等结果和 RAG 文档状态 |
+| MySQL | 长期记忆正文、RAG 文档状态，以及 Agent 会话、运行和原始 SSE 事件 |
 | Qdrant | semantic / episodic 长期记忆向量索引，所有请求带 `user_id` payload filter |
 | Milvus | RAG 分块正文和向量，检索及正文回查都限定 `user_id` 与 ready document_id |
 | Neo4j | RAG 分块关系和语义记忆实体关系，节点身份包含 `user_id` |
@@ -18,7 +18,8 @@ Working Memory 仍在 Python 进程内按 `user_id + session_id` 管理，不进
 
 ## 初始化
 
-1. 在 MySQL 执行 `src/main/resources/db/migration/V1__data_port.sql`。
+1. 在 MySQL 依次执行 `src/main/resources/db/migration/V1__data_port.sql` 和
+   `src/main/resources/db/migration/V2__agent_run.sql`。
 2. 在 Neo4j 执行 `src/main/resources/db/neo4j-schema.cypher`。
 3. 创建 Qdrant collection，默认名 `agent_memory_dev`，使用 768 维 Cosine 向量，
    并为 `user_id`、`status`、`memory_type`、`memory_id` 建 keyword payload index。
@@ -67,6 +68,22 @@ collection 并修改上述 collection 名称；旧向量不能直接复用，需
 `session_yyyyMMdd_HHmmss_dev_user`。DataPort 不生成或信任默认身份，所有调用方
 都必须显式传入非空 user ID。
 
+## Agent 运行与事件
+
+`AgentRunDataPort` 在一个事务中处理会话占用、运行状态和事件序号：
+
+| 表 | 主键 | 用途 |
+|---|---|---|
+| `agent_session` | `user_id + session_id` | 保存当前占用会话的 request ID |
+| `agent_run` | `user_id + request_id` | 保存请求摘要、运行状态和最后事件序号 |
+| `agent_run_event` | `user_id + request_id + event_seq` | 保存 Python 发出的完整事件 JSON |
+
+同一 request ID 只有用户消息摘要、session ID 和 message ID 全部一致时才视为重试。
+历史、摘要和运行配置是 Java 派生的执行快照，不参与重试判断，避免运行完成后历史变化
+导致合法重试被误判为冲突。
+相同事件序号和内容重复写入时直接复用；序号相同但内容不同会报冲突。结束事件与
+运行终态在同一事务提交，并只释放属于该请求的会话占用。
+
 ## Interface 映射
 
 `backend/Interface` 的内部 HTTP 接口只做认证、开发期会话校验和 JSON 到 Java
@@ -80,6 +97,9 @@ collection 并修改上述 collection 名称；旧向量不能直接复用，需
 | `/internal/storage/memory/query` | `memory().query(query)` |
 | `/internal/storage/memory/store` | `memory().store(storeCommand)` |
 | `/internal/storage/memory/forget` | `memory().forget(forgetCommand)` |
+
+Java 调用 Python Agent 时，`backend/Interface` 使用 `agentRuns()` 先登记运行，再逐条
+保存 SSE 事件。该端口不负责网络调用或前端转发。
 
 Memory 请求中的 `scope` 只允许为 `user`；Working Memory 由 Python 处理，不映射到
 DataPort。`graph_status` 为 Python 图提炼状态，不作为数据库路由条件；只有实际的

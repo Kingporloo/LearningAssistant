@@ -10,16 +10,19 @@ import org.neo4j.driver.GraphDatabase;
 public final class DataPortResources implements AutoCloseable {
     private final HikariDataSource dataSource;
     private final Neo4jGraphStore graphStore;
+    private final AgentRunDataPort agentRuns;
     private final MemoryDataPort memory;
     private final RagDataPort rag;
 
     private DataPortResources(
             HikariDataSource dataSource,
             Neo4jGraphStore graphStore,
+            AgentRunDataPort agentRuns,
             MemoryDataPort memory,
             RagDataPort rag) {
         this.dataSource = dataSource;
         this.graphStore = graphStore;
+        this.agentRuns = agentRuns;
         this.memory = memory;
         this.rag = rag;
     }
@@ -70,6 +73,7 @@ public final class DataPortResources implements AutoCloseable {
             return new DataPortResources(
                     dataSource,
                     graph,
+                    new AgentRunDataPort(dataSource),
                     new MemoryDataPort(mysql, qdrant, graph, vectorDimension),
                     new RagDataPort(mysql, milvus, graph, vectorDimension));
         } catch (RuntimeException exception) {
@@ -80,6 +84,10 @@ public final class DataPortResources implements AutoCloseable {
 
     public MemoryDataPort memory() {
         return memory;
+    }
+
+    public AgentRunDataPort agentRuns() {
+        return agentRuns;
     }
 
     public RagDataPort rag() {

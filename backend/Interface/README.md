@@ -2,7 +2,8 @@
 
 该模块处理 Java 与 Python Agent 之间的两个通信方向：Python 调用 Java 数据服务，
 以及 Java 调用 Python Agent SSE 运行接口。数据库操作仍全部委托给
-`backend/DataPort`，SSE 客户端不负责登录鉴权、事件持久化或前端转发。
+`backend/DataPort`。`AgentSseClient` 只处理网络协议，`AgentRunService` 负责运行
+幂等与事件持久化；登录鉴权和面向前端的 Controller 仍由后续用户网关负责。
 
 ## Python 调用 Java 数据服务
 
@@ -61,17 +62,29 @@ Python 侧将 `JAVA_STORAGE_BASE_URL` 设置为 `http://127.0.0.1:8080`。服务
 - 校验事件的 request_id、session_id 和连续 event_seq；
 - 在连接未收到 run_finished 就结束时报告中断。
 
-调用方应在 Java 虚拟线程中消费事件，并用 try-with-resources 保证前端断开或运行
-结束时关闭到 Python 的响应流：
+业务入口通过 `AgentRunService.execute` 调用。服务会先按 request ID 登记运行，逐条
+把完整事件 JSON 落库，成功后才交给 consumer 转发：
 
 ```java
 var client = AgentSseClient.fromEnvironment();
-try (var stream = client.openRun(runRequest)) {
-    stream.consume(event -> {
-        // 后续阶段在这里幂等保存事件，并转发给前端。
-    });
-}
+var service = new AgentRunService(client, resources.agentRuns());
+var result = service.execute(runRequest, event -> forwardToFrontend(event));
 ```
+
+`RunResult.outcome` 的含义如下：
+
+| outcome | 行为 |
+|---|---|
+| `EXECUTED` | 本次取得执行权，已调用 Python 并持久化事件 |
+| `REPLAYED` | 请求已结束，按序回放数据库事件，未再次调用 Python |
+| `IN_PROGRESS` | 相同请求正在执行 |
+| `SESSION_BUSY` | 同会话的另一请求正在执行 |
+| `TERMINAL` | 请求曾中断，保留记录且不自动重放 |
+
+相同 request ID 若携带不同请求内容、session ID 或 message ID，会作为冲突拒绝。
+Python 流提前结束、消费端断开或事件持久化失败时，运行会标记为 `interrupted`；已知
+可能发生过的工具写操作不会自动重试。`AgentStorageServer` 启动时会把上次进程遗留的
+`running` 记录改为 `interrupted` 并释放会话。
 
 客户端环境变量：
 

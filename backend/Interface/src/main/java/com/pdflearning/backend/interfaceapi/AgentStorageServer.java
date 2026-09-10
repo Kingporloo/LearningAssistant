@@ -58,6 +58,7 @@ public final class AgentStorageServer implements AutoCloseable {
 
         var resources = DataPortResources.fromEnvironment();
         try {
+            resources.agentRuns().recoverInterruptedRuns();
             var server = HttpServer.create(new InetSocketAddress(host, port), 0);
             return new AgentStorageServer(
                     server, Executors.newVirtualThreadPerTaskExecutor(), resources, token);

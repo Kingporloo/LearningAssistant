@@ -26,12 +26,22 @@ etcd 和 MinIO 只供 Milvus 在 Docker 网络中访问，不映射宿主机端�
 
 ## 初始化内容
 
-- MySQL 第一次创建数据卷时执行 `V1__data_port.sql`。
+- MySQL 第一次创建数据卷时依次执行 `V1__data_port.sql` 和
+  `V2__agent_run.sql`；后者创建 Agent 会话、运行和事件表。
 - Milvus 初始化 `rag_chunks_dev` 的完整 RAG 分块 schema 和 768 维 COSINE 索引。
 - Neo4j 执行项目现有的用户范围唯一约束。
 - Qdrant Cloud 中的 `agent_memory_dev` collection 仍需提前建立为 768 维 COSINE collection，并为 `user_id`、`memory_id`、`memory_type`、`status` 建立 keyword payload index。
 
 初始化脚本只创建不存在的 Milvus collection。修改 embedding 维度后，应使用新 collection 名，不能把不同维度的向量写入同一 collection。
+
+MySQL 的 `/docker-entrypoint-initdb.d` 只在首次创建数据卷时执行。已有开发数据卷需要
+从项目根目录手动应用新增迁移：
+
+```bash
+docker compose --env-file deploy/.env -f deploy/compose.yaml exec -T mysql \
+  sh -c 'mysql -u root -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' \
+  < backend/DataPort/src/main/resources/db/migration/V2__agent_run.sql
+```
 
 ## 云服务器配置
 

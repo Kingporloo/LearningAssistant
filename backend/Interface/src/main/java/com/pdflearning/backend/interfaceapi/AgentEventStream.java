@@ -113,53 +113,25 @@ public final class AgentEventStream implements AutoCloseable {
         if (root == null || !root.isObject()) {
             throw new IOException("Python Agent SSE data 必须是 JSON 对象");
         }
-        String dataType = requiredText(root, "type");
-        String dataRequestId = requiredText(root, "request_id");
-        String dataSessionId = requiredText(root, "session_id");
-        JsonNode sequence = root.get("event_seq");
-        JsonNode payload = root.get("payload");
-        if (!eventType.equals(dataType)) {
-            throw new IOException("Python Agent SSE 的 event 与 data.type 不一致");
-        }
-        if (!requestId.equals(dataRequestId) || !sessionId.equals(dataSessionId)) {
-            throw new IOException("Python Agent SSE 事件不属于当前运行");
-        }
-        if (sequence == null || !sequence.isIntegralNumber() || !sequence.canConvertToLong()) {
-            throw new IOException("Python Agent SSE event_seq 必须是整数");
-        }
-        long eventSequence = sequence.longValue();
-        if (eventSequence != nextSequence) {
-            throw new IOException(
-                    "Python Agent SSE event_seq 不连续，期望 "
-                            + nextSequence + "，实际 " + eventSequence);
-        }
-        if (payload == null || !payload.isObject()) {
-            throw new IOException("Python Agent SSE payload 必须是 JSON 对象");
-        }
-
         AgentEvent event;
         try {
-            event = new AgentEvent(
-                    dataType,
-                    dataRequestId,
-                    dataSessionId,
-                    eventSequence,
-                    payload);
+            event = AgentEvent.fromJson(root);
         } catch (IllegalArgumentException exception) {
+            throw new IOException("Python Agent SSE 事件无效: " + exception.getMessage(), exception);
+        }
+        if (!eventType.equals(event.type())) {
+            throw new IOException("Python Agent SSE 的 event 与 data.type 不一致");
+        }
+        if (!requestId.equals(event.requestId()) || !sessionId.equals(event.sessionId())) {
+            throw new IOException("Python Agent SSE 事件不属于当前运行");
+        }
+        if (event.eventSeq() != nextSequence) {
             throw new IOException(
-                    "Python Agent SSE 事件无效: " + exception.getMessage(),
-                    exception);
+                    "Python Agent SSE event_seq 不连续，期望 "
+                            + nextSequence + "，实际 " + event.eventSeq());
         }
         nextSequence++;
         terminalSeen = "run_finished".equals(event.type());
         return event;
-    }
-
-    private static String requiredText(JsonNode root, String name) throws IOException {
-        JsonNode value = root.get(name);
-        if (value == null || !value.isTextual() || value.textValue().isBlank()) {
-            throw new IOException("Python Agent SSE " + name + " 必须是非空字符串");
-        }
-        return value.textValue();
     }
 }
