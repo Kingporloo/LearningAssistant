@@ -1,6 +1,6 @@
-"""RAG 文档加载、稳定分块与向量生成。
+"""RAG Markdown 加载、稳定分块与向量生成。
 
-本模块只产生交给 Java 入库的数据，不连接数据库。
+格式转换由 PDF2Markdown.py 完成；本模块只产生交给 Java 入库的数据。
 """
 
 from __future__ import annotations
@@ -15,9 +15,13 @@ from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 
 PAGE_MARK_RE = re.compile(r"<!--\s*第\s*(\d+)\s*页\s*-->")
-SUPPORTED_SUFFIXES = {".md", ".txt", ".pdf"}
 HEADER_SPLIT_ON = [("#", "h1"), ("##", "h2"), ("###", "h3")]
-DEFAULT_EMBED_MODEL = "BAAI/bge-small-zh-v1.5"
+DEFAULT_EMBED_MODEL = "jinaai/jina-embeddings-v2-base-zh"
+# 4GB 显存（RTX 3050 Laptop）下 2048 Token 长序列的安全批量，避免注意力矩阵 OOM。
+EMBED_BATCH_SIZE = 4
+# jina-v2 的 ALiBi 缓冲区按 max_position_embeddings 预注册为 [1, heads, N, N]，
+# 默认 8192 需 3.2GB 显存；收敛到分块上限 2048（约 200MB）才能在 4GB 卡上常驻。
+EMBED_MAX_SEQ_TOKENS = 2048
 
 
 @dataclass(frozen=True)
@@ -53,15 +57,49 @@ class EmbeddingModel:
 
                     self._model = HuggingFaceEmbeddings(
                         model_name=self.model_name,
-                        encode_kwargs={"normalize_embeddings": True},
+                        model_kwargs={
+                            # jina-embeddings-v2 是自定义 JinaBERT 架构，模型仓库携带自定义代码。
+                            "trust_remote_code": True,
+                            "config_kwargs": {"max_position_embeddings": EMBED_MAX_SEQ_TOKENS},
+                        },
+                        encode_kwargs={
+                            "normalize_embeddings": True,
+                            "batch_size": EMBED_BATCH_SIZE,
+                        },
                     )
+                    # 编码截断长度与 ALiBi 缓冲区保持一致，防止超长输入触发缓冲区重建。
+                    client = self._model._client
+                    client.max_seq_length = min(client.max_seq_length, EMBED_MAX_SEQ_TOKENS)
         return self._model
 
     def embed_query(self, text: str) -> list[float]:
-        return list(self._get_model().embed_query(text))
+        return self.embed_documents([text])[0]
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        limit = self.max_tokens
+        for text in texts:
+            count = self.count_tokens(text)
+            if count > limit:
+                raise ValueError(f"Embedding 输入有 {count} Token，超过模型上限 {limit}，请先分块")
         return [list(vector) for vector in self._get_model().embed_documents(texts)]
+
+    @property
+    def max_tokens(self) -> int:
+        client = self._get_model()._client
+        limit = client.max_seq_length
+        if not isinstance(limit, int) or limit <= 0:
+            raise RuntimeError("Embedding 模型未提供有效的 max_seq_length")
+        return min(limit, client.tokenizer.model_max_length)
+
+    def count_tokens(self, text: str, *, add_special_tokens: bool = True) -> int:
+        # 与 HuggingFaceEmbeddings 的换行预处理保持一致，计数时禁止截断。
+        tokenizer = self._get_model()._client.tokenizer
+        return len(tokenizer.encode(
+            text.replace("\n", " "),
+            add_special_tokens=add_special_tokens,
+            truncation=False,
+            verbose=False,
+        ))
 
 
 def resolve_file_reference(file_ref: str, allowed_root: str | Path) -> Path:
@@ -72,33 +110,20 @@ def resolve_file_reference(file_ref: str, allowed_root: str | Path) -> Path:
         raise ValueError("file_ref 不在 RAG 允许读取的目录中")
     if not path.is_file():
         raise ValueError("file_ref 必须指向文件")
-    if path.suffix.lower() not in SUPPORTED_SUFFIXES:
-        raise ValueError(f"不支持的文件类型: {path.suffix}")
+    if path.suffix.lower() != ".md":
+        raise ValueError("RAG 只接收 .md 文件，请先通过 PDF2Markdown.py 完成格式转换")
     return path
 
 
 def load_file(path: Path, source_name: str | None = None) -> list[tuple[dict[str, Any], str]]:
-    """读取一个受控文件，路径不会写入面向用户的来源元数据。"""
-    suffix = path.suffix.lower()
+    """读取已转换的 Markdown，不再解析原始 PDF 或其他文件格式。"""
     source = source_name or path.name
-    base = {"source": source, "file_type": suffix.lstrip(".")}
-
-    if suffix == ".pdf":
-        from langchain_community.document_loaders import PyPDFLoader
-
-        pages = PyPDFLoader(str(path)).load()
-        return [
-            ({**base, "page": int(page.metadata.get("page", 0)) + 1}, page.page_content)
-            for page in pages
-        ]
-
+    base = {"source": source, "file_type": "md"}
     text = path.read_text(encoding="utf-8")
-    if suffix == ".md":
-        return [
-            ({**base, **({"page": page} if page is not None else {})}, content)
-            for page, content in _split_markdown_by_page(text)
-        ]
-    return [(base, text)]
+    return [
+        ({**base, **({"page": page} if page is not None else {})}, content)
+        for page, content in _split_markdown_by_page(text)
+    ]
 
 
 def _split_markdown_by_page(text: str) -> list[tuple[int | None, str]]:
@@ -118,15 +143,27 @@ def chunk_segments(
     segments: list[tuple[dict[str, Any], str]],
     *,
     document_id: str,
-    chunk_size: int = 1000,
-    chunk_overlap: int = 200,
+    chunk_size: int = 2048,
+    chunk_overlap: int = 256,
+    embeddings: EmbeddingModel | None = None,
 ) -> list[PreparedChunk]:
-    """按文档生成稳定 ID；chunk_index 只表达文档内顺序。"""
+    """按 Token 分块；chunk_size 含特殊 Token，chunk_overlap 只计正文 Token。"""
     if not document_id.strip():
         raise ValueError("document_id 不能为空")
-    recursive = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
+    if not any(text.strip() for _, text in segments):
+        return []
+    embeddings = embeddings or EmbeddingModel()
+    max_tokens = min(chunk_size, embeddings.max_tokens)
+    token_limit = max_tokens - embeddings.count_tokens("")
+    if token_limit <= 0:
+        raise ValueError("分块 Token 上限必须大于模型所需的特殊 Token 数量")
+    if not 0 <= chunk_overlap < token_limit:
+        raise ValueError(f"chunk_overlap 必须在 0 到 {token_limit - 1} Token 之间")
+    token_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=token_limit,
         chunk_overlap=chunk_overlap,
+        length_function=lambda text: embeddings.count_tokens(text, add_special_tokens=False),
+        separators=["\n\n", "\n", "。", "！", "？", "；", " ", ""],
     )
     markdown = MarkdownHeaderTextSplitter(
         headers_to_split_on=HEADER_SPLIT_ON,
@@ -136,14 +173,16 @@ def chunk_segments(
     for metadata, text in segments:
         if not text.strip():
             continue
-        documents = markdown.split_text(text) if metadata["file_type"] == "md" else [Document(page_content=text)]
-        parts.extend((metadata, item) for item in recursive.split_documents(documents))
+        documents = markdown.split_text(text)
+        parts.extend((metadata, item) for item in token_splitter.split_documents(documents))
 
     chunks: list[PreparedChunk] = []
     for base, part in parts:
         text = part.page_content.strip()
         if not text:
             continue
+        if embeddings.count_tokens(text) > max_tokens:
+            raise ValueError(f"分块超过 {max_tokens} Token 上限，无法完整向量化")
         metadata = {**base, **part.metadata}
         chunk_index = len(chunks)
         chunks.append(
@@ -169,20 +208,22 @@ def prepare_document(
     allowed_root: str | Path,
     document_id: str,
     source_name: str | None = None,
-    chunk_size: int = 1000,
-    chunk_overlap: int = 200,
+    chunk_size: int = 2048,
+    chunk_overlap: int = 256,
     embeddings: EmbeddingModel | None = None,
 ) -> list[dict[str, Any]]:
     path = resolve_file_reference(file_ref, allowed_root)
+    embeddings = embeddings or EmbeddingModel()
     chunks = chunk_segments(
         load_file(path, source_name),
         document_id=document_id,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
+        embeddings=embeddings,
     )
     if not chunks:
         return []
-    vectors = (embeddings or EmbeddingModel()).embed_documents([chunk.text for chunk in chunks])
+    vectors = embeddings.embed_documents([chunk.text for chunk in chunks])
     if len(vectors) != len(chunks):
         raise RuntimeError("嵌入模型返回的向量数量与分块数量不一致")
     return [{**chunk.to_dict(), "vector": vector} for chunk, vector in zip(chunks, vectors)]
@@ -195,4 +236,3 @@ def _optional_text(value: Any) -> str | None:
 
 def _optional_int(value: Any) -> int | None:
     return int(value) if value is not None else None
-

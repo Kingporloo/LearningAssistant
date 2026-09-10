@@ -152,6 +152,7 @@ def _write_finished(
             "name": name,
             "outcome": record.outcome,
             "business_status": record.business_status,
+            "content": record.message.content,
             "result": record.result,
         },
     })

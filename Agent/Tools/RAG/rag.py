@@ -15,15 +15,15 @@ from Agent.Interface.BackendClient import BackendClient, RunContext
 
 
 class RAGBuilder:
-    """把一个 Java 授权的文件转换为可持久化构建结果。"""
+    """把 Java 提供的 Markdown 构建为可持久化的分块、向量和图。"""
 
     def __init__(
         self,
         allowed_root: str | Path,
         *,
         embeddings: EmbeddingModel | None = None,
-        chunk_size: int = 500,
-        chunk_overlap: int = 50,
+        chunk_size: int = 2048,
+        chunk_overlap: int = 256,
         similarity_topk: int = 3,
         similarity_threshold: float = 0.5,
     ) -> None:

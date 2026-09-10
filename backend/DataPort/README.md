@@ -20,14 +20,14 @@ Working Memory 仍在 Python 进程内按 `user_id + session_id` 管理，不进
 
 1. 在 MySQL 执行 `src/main/resources/db/migration/V1__data_port.sql`。
 2. 在 Neo4j 执行 `src/main/resources/db/neo4j-schema.cypher`。
-3. 创建 Qdrant collection，默认名 `agent_memory_dev`，使用 512 维 Cosine 向量，
+3. 创建 Qdrant collection，默认名 `agent_memory_dev`，使用 768 维 Cosine 向量，
    并为 `user_id`、`status`、`memory_type`、`memory_id` 建 keyword payload index。
 4. 创建 Milvus collection，默认名 `rag_chunks_dev`。字段为：
    `chunk_id`（VARCHAR 主键）、`user_id`、`document_id`、`chunk_index`、`text`、
-   `source`、`file_type`、可空的 `page/h1/h2/h3`，以及 512 维 `vector`；向量索引
+   `source`、`file_type`、可空的 `page/h1/h2/h3`，以及 768 维 `vector`；向量索引
    使用 COSINE，`user_id` 和 `document_id` 是标量过滤字段。
 
-维度 512 与当前 Python 嵌入模型 `BAAI/bge-small-zh-v1.5` 一致。更换模型时必须
+维度 768 与当前 Python 嵌入模型 `jinaai/jina-embeddings-v2-base-zh` 一致。更换模型时必须
 先建立新的开发 collection，不能把不同维度或不同模型的向量混入同一索引。
 
 ## 运行配置

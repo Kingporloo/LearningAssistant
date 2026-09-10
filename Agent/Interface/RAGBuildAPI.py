@@ -19,7 +19,7 @@ class BuildRequest(BaseModel):
     user_id: str = Field(min_length=1)
     document_id: str = Field(min_length=1)
     request_id: str = Field(min_length=1)
-    file_ref: str = Field(min_length=1)
+    file_ref: str = Field(min_length=1, description="Java 授权的已转换 .md 文件路径")
     source_name: str | None = None
 
 
