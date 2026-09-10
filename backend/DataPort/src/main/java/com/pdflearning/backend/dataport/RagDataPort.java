@@ -26,14 +26,17 @@ public final class RagDataPort {
     private final MySqlDataStore mysql;
     private final MilvusRagIndex milvus;
     private final Neo4jGraphStore graphStore;
+    private final int vectorDimension;
 
     public RagDataPort(
             MySqlDataStore mysql,
             MilvusRagIndex milvus,
-            Neo4jGraphStore graphStore) {
+            Neo4jGraphStore graphStore,
+            int vectorDimension) {
         this.mysql = mysql;
         this.milvus = milvus;
         this.graphStore = graphStore;
+        this.vectorDimension = requireVectorDimension(vectorDimension);
     }
 
     public Map<String, Object> search(String userId, List<Double> queryVector, int limit) {
@@ -162,7 +165,7 @@ public final class RagDataPort {
                 "status", "empty", "results", List.of(), "message", "当前用户的知识库没有可检索内容。");
     }
 
-    private static void validateSearch(String userId, List<Double> vector, int limit) {
+    private void validateSearch(String userId, List<Double> vector, int limit) {
         requireText(userId, "user_id");
         validateVector(vector);
         if (limit < 1 || limit > 100) {
@@ -170,7 +173,7 @@ public final class RagDataPort {
         }
     }
 
-    private static void validateBuild(BuildCommand command) {
+    private void validateBuild(BuildCommand command) {
         requireText(command.userId(), "user_id");
         requireText(command.requestId(), "request_id");
         requireText(command.documentId(), "document_id");
@@ -185,7 +188,6 @@ public final class RagDataPort {
         }
 
         var chunkIds = new HashSet<String>();
-        Integer dimensions = null;
         for (var chunk : command.chunks()) {
             if (!command.documentId().equals(chunk.documentId())) {
                 throw new IllegalArgumentException("分块 document_id 与构建目标不一致");
@@ -198,11 +200,6 @@ public final class RagDataPort {
                 throw new IllegalArgumentException("构建结果存在重复 chunk_id");
             }
             validateVector(chunk.vector());
-            if (dimensions == null) {
-                dimensions = chunk.vector().size();
-            } else if (dimensions != chunk.vector().size()) {
-                throw new IllegalArgumentException("同一文档的分块向量维度必须一致");
-            }
         }
         validateEdges(command.nextEdges(), chunkIds);
         validateEdges(command.similarEdges(), chunkIds);
@@ -216,11 +213,22 @@ public final class RagDataPort {
         }
     }
 
-    private static void validateVector(List<Double> vector) {
+    private void validateVector(List<Double> vector) {
         if (vector == null || vector.isEmpty()
                 || vector.stream().anyMatch(value -> value == null || !Double.isFinite(value))) {
             throw new IllegalArgumentException("向量必须是非空有限数值数组");
         }
+        if (vector.size() != vectorDimension) {
+            throw new IllegalArgumentException(
+                    "向量维度必须是 " + vectorDimension + "，实际为 " + vector.size());
+        }
+    }
+
+    private static int requireVectorDimension(int value) {
+        if (value < 1) {
+            throw new IllegalArgumentException("向量维度必须是正整数");
+        }
+        return value;
     }
 
     private static void requireText(String value, String name) {

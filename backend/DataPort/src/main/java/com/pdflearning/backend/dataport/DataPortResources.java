@@ -38,6 +38,7 @@ public final class DataPortResources implements AutoCloseable {
         var qdrantUrl = required(environment, "QDRANT_URL");
         var milvusUrl = required(environment, "MILVUS_URL");
         var timeout = Duration.ofSeconds(integer(environment, "DATA_PORT_TIMEOUT_SECONDS", 15));
+        var vectorDimension = integer(environment, "EMBEDDING_VECTOR_DIMENSION", 768);
         var qdrant = new QdrantMemoryIndex(
                 qdrantUrl,
                 environment.getOrDefault("QDRANT_MEMORY_COLLECTION", "agent_memory_dev"),
@@ -69,8 +70,8 @@ public final class DataPortResources implements AutoCloseable {
             return new DataPortResources(
                     dataSource,
                     graph,
-                    new MemoryDataPort(mysql, qdrant, graph),
-                    new RagDataPort(mysql, milvus, graph));
+                    new MemoryDataPort(mysql, qdrant, graph, vectorDimension),
+                    new RagDataPort(mysql, milvus, graph, vectorDimension));
         } catch (RuntimeException exception) {
             dataSource.close();
             throw exception;

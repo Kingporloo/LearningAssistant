@@ -63,23 +63,27 @@ public final class MemoryDataPort {
     private final QdrantMemoryIndex qdrant;
     private final Neo4jGraphStore graphStore;
     private final ObjectMapper mapper;
+    private final int vectorDimension;
 
     public MemoryDataPort(
             MySqlDataStore mysql,
             QdrantMemoryIndex qdrant,
-            Neo4jGraphStore graphStore) {
-        this(mysql, qdrant, graphStore, new ObjectMapper());
+            Neo4jGraphStore graphStore,
+            int vectorDimension) {
+        this(mysql, qdrant, graphStore, new ObjectMapper(), vectorDimension);
     }
 
     MemoryDataPort(
             MySqlDataStore mysql,
             QdrantMemoryIndex qdrant,
             Neo4jGraphStore graphStore,
-            ObjectMapper mapper) {
+            ObjectMapper mapper,
+            int vectorDimension) {
         this.mysql = mysql;
         this.qdrant = qdrant;
         this.graphStore = graphStore;
         this.mapper = mapper;
+        this.vectorDimension = requireVectorDimension(vectorDimension);
     }
 
     public Map<String, Object> query(Query query) {
@@ -248,7 +252,7 @@ public final class MemoryDataPort {
         requireText(command.source().messageId(), "source.message_id");
     }
 
-    private static void validateQuery(Query query) {
+    private void validateQuery(Query query) {
         requireText(query.userId(), "user_id");
         requireLongTermType(query.memoryType(), true);
         validateVector(query.queryVector(), "query_vector");
@@ -273,10 +277,21 @@ public final class MemoryDataPort {
         }
     }
 
-    private static void validateVector(List<Double> vector, String name) {
+    private void validateVector(List<Double> vector, String name) {
         if (vector == null || vector.isEmpty() || vector.stream().anyMatch(value -> value == null || !Double.isFinite(value))) {
             throw new IllegalArgumentException(name + " 必须是非空有限数值数组");
         }
+        if (vector.size() != vectorDimension) {
+            throw new IllegalArgumentException(
+                    name + " 维度必须是 " + vectorDimension + "，实际为 " + vector.size());
+        }
+    }
+
+    private static int requireVectorDimension(int value) {
+        if (value < 1) {
+            throw new IllegalArgumentException("向量维度必须是正整数");
+        }
+        return value;
     }
 
     private static String requireUuid(String value) {

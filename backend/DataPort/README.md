@@ -49,6 +49,8 @@ MILVUS_TOKEN                   # 本地未启用认证时可省略
 MILVUS_DATABASE=default
 MILVUS_RAG_COLLECTION=rag_chunks_dev
 
+EMBEDDING_VECTOR_DIMENSION=768
+
 NEO4J_URI
 NEO4J_USER
 NEO4J_PASSWORD
@@ -56,6 +58,10 @@ NEO4J_DATABASE=neo4j
 
 DATA_PORT_TIMEOUT_SECONDS=15
 ```
+
+`EMBEDDING_VECTOR_DIMENSION` 必须同时匹配 Python 嵌入模型、Qdrant collection 和
+Milvus collection。若现有 collection 按旧模型创建为其他维度，应新建 768 维
+collection 并修改上述 collection 名称；旧向量不能直接复用，需要用新模型重新生成。
 
 开发身份由 `backend/User` 提供，当前固定为 `dev_user`；session ID 格式为
 `session_yyyyMMdd_HHmmss_dev_user`。DataPort 不生成或信任默认身份，所有调用方
