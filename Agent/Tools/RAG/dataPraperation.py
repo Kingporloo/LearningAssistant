@@ -118,8 +118,8 @@ def chunk_segments(
     segments: list[tuple[dict[str, Any], str]],
     *,
     document_id: str,
-    chunk_size: int = 500,
-    chunk_overlap: int = 50,
+    chunk_size: int = 1000,
+    chunk_overlap: int = 200,
 ) -> list[PreparedChunk]:
     """按文档生成稳定 ID；chunk_index 只表达文档内顺序。"""
     if not document_id.strip():
@@ -169,8 +169,8 @@ def prepare_document(
     allowed_root: str | Path,
     document_id: str,
     source_name: str | None = None,
-    chunk_size: int = 500,
-    chunk_overlap: int = 50,
+    chunk_size: int = 1000,
+    chunk_overlap: int = 200,
     embeddings: EmbeddingModel | None = None,
 ) -> list[dict[str, Any]]:
     path = resolve_file_reference(file_ref, allowed_root)
