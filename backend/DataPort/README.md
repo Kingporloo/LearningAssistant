@@ -18,8 +18,8 @@ Working Memory 仍在 Python 进程内按 `user_id + session_id` 管理，不进
 
 ## 初始化
 
-1. 在 MySQL 依次执行 `src/main/resources/db/migration/V1__data_port.sql` 和
-   `src/main/resources/db/migration/V2__agent_run.sql`。
+1. 在 MySQL 依次执行 `src/main/resources/db/migration/V1__data_port.sql`、
+   `V2__agent_run.sql` 和 `V3__context_summary.sql`。
 2. 在 Neo4j 执行 `src/main/resources/db/neo4j-schema.cypher`。
 3. 创建 Qdrant collection，默认名 `agent_memory_dev`，使用 768 维 Cosine 向量，
    并为 `user_id`、`status`、`memory_type`、`memory_id` 建 keyword payload index。
@@ -27,6 +27,9 @@ Working Memory 仍在 Python 进程内按 `user_id + session_id` 管理，不进
    `chunk_id`（VARCHAR 主键）、`user_id`、`document_id`、`chunk_index`、`text`、
    `source`、`file_type`、可空的 `page/h1/h2/h3`，以及 768 维 `vector`；向量索引
    使用 COSINE，`user_id` 和 `document_id` 是标量过滤字段。
+
+Docker Compose 的初始化脚本只会在全新的 MySQL 数据卷上自动执行。已有开发数据卷
+需要手动执行新增的 `V3__context_summary.sql`。
 
 维度 768 与当前 Python 嵌入模型 `jinaai/jina-embeddings-v2-base-zh` 一致。更换模型时必须
 先建立新的开发 collection，不能把不同维度或不同模型的向量混入同一索引。
@@ -77,6 +80,8 @@ collection 并修改上述 collection 名称；旧向量不能直接复用，需
 | `agent_session` | `user_id + session_id` | 保存当前占用会话的 request ID |
 | `agent_run` | `user_id + request_id` | 保存请求摘要、运行状态和最后事件序号 |
 | `agent_run_event` | `user_id + request_id + event_seq` | 保存 Python 发出的完整事件 JSON |
+| `session_summary` | `user_id + session_id` | 保存当前会话摘要及版本 |
+| `context_summary_operation` | `user_id + request_id + operation_id` | 保存摘要写入的幂等结果 |
 
 同一 request ID 只有用户消息摘要、session ID 和 message ID 全部一致时才视为重试。
 历史、摘要和运行配置是 Java 派生的执行快照，不参与重试判断，避免运行完成后历史变化
@@ -97,6 +102,7 @@ collection 并修改上述 collection 名称；旧向量不能直接复用，需
 | `/internal/storage/memory/query` | `memory().query(query)` |
 | `/internal/storage/memory/store` | `memory().store(storeCommand)` |
 | `/internal/storage/memory/forget` | `memory().forget(forgetCommand)` |
+| `/internal/storage/context/summary` | `contextSummaries().store(storeCommand)` |
 
 Java 调用 Python Agent 时，`backend/Interface` 使用 `agentRuns()` 先登记运行，再逐条
 保存 SSE 事件。该端口不负责网络调用或前端转发。

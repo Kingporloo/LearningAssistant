@@ -1,6 +1,7 @@
 package com.pdflearning.backend.interfaceapi;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.pdflearning.backend.dataport.ContextSummaryDataPort;
 import com.pdflearning.backend.dataport.MemoryDataPort;
 import com.pdflearning.backend.dataport.RagDataPort;
 import java.time.OffsetDateTime;
@@ -15,15 +16,21 @@ final class DataPortRequestHandler {
         RAG_GRAPH,
         MEMORY_QUERY,
         MEMORY_STORE,
-        MEMORY_FORGET
+        MEMORY_FORGET,
+        CONTEXT_SUMMARY_STORE
     }
 
+    private final ContextSummaryDataPort summaries;
     private final MemoryDataPort memory;
     private final RagDataPort rag;
 
-    DataPortRequestHandler(MemoryDataPort memory, RagDataPort rag) {
+    DataPortRequestHandler(
+            MemoryDataPort memory,
+            RagDataPort rag,
+            ContextSummaryDataPort summaries) {
         this.memory = memory;
         this.rag = rag;
+        this.summaries = summaries;
     }
 
     Map<String, Object> handle(
@@ -42,7 +49,23 @@ final class DataPortRequestHandler {
             case MEMORY_QUERY -> memory.query(memoryQuery(context, body));
             case MEMORY_STORE -> memory.store(memoryStore(context, body));
             case MEMORY_FORGET -> memory.forget(memoryForget(context, body));
+            case CONTEXT_SUMMARY_STORE -> summaries.store(contextSummary(context, body));
         };
+    }
+
+    static ContextSummaryDataPort.StoreCommand contextSummary(
+            InternalRequestContext context,
+            JsonNode body) {
+        return new ContextSummaryDataPort.StoreCommand(
+                context.userId(),
+                context.sessionId(),
+                context.requestId(),
+                requiredText(body, "operation_id"),
+                nonNegativeInteger(body, "base_version"),
+                optionalText(body, "history_cursor"),
+                optionalText(body, "through_message_id"),
+                sourceRefs(body),
+                requiredText(body, "text"));
     }
 
     static MemoryDataPort.Query memoryQuery(
@@ -197,6 +220,27 @@ final class DataPortRequestHandler {
             throw new IllegalArgumentException(name + " 必须是整数");
         }
         return value.intValue();
+    }
+
+    private static int nonNegativeInteger(JsonNode body, String name) {
+        int value = integer(body, name);
+        if (value < 0) {
+            throw new IllegalArgumentException(name + " 不能小于 0");
+        }
+        return value;
+    }
+
+    private static JsonNode sourceRefs(JsonNode body) {
+        var refs = body.get("source_refs");
+        if (refs == null || !refs.isArray()) {
+            throw new IllegalArgumentException("source_refs 必须是数组");
+        }
+        for (var ref : refs) {
+            if (!ref.isObject()) {
+                throw new IllegalArgumentException("source_refs 的元素必须是对象");
+            }
+        }
+        return refs.deepCopy();
     }
 
     private static double number(JsonNode body, String name) {

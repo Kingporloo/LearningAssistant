@@ -196,24 +196,11 @@ class AgentRunRequest(_RequestModel):
 
     @model_validator(mode="after")
     def validate_stable_ids(self) -> "AgentRunRequest":
-        message_ids = [
-            message.message_id
-            for turn in self.recent_history
-            for message in (turn.user_message, turn.assistant_message)
-        ]
-        if self.message_id in message_ids or len(message_ids) != len(set(message_ids)):
-            raise ValueError("当前消息和 recent_history 的 message_id 不能重复")
-
-        group_ids = [group.group_id for group in self.execution_history]
-        if len(group_ids) != len(set(group_ids)):
-            raise ValueError("execution_history 的 group_id 不能重复")
-        call_ids = [
-            call.tool_call_id
-            for group in self.execution_history
-            for call in group.tool_calls
-        ]
-        if len(call_ids) != len(set(call_ids)):
-            raise ValueError("execution_history 的 tool_call_id 必须全局唯一")
+        _validate_history_ids(
+            self.recent_history,
+            self.execution_history,
+            current_message_id=self.message_id,
+        )
         return self
 
     def to_agent_run_input(
@@ -342,6 +329,8 @@ def _context_snapshot(
 def _validate_history_ids(
     dialogue: list[DialogueTurnSnapshot],
     groups: list[ExecutionGroupSnapshot],
+    *,
+    current_message_id: str | None = None,
 ) -> None:
     message_ids = [
         message.message_id
@@ -350,6 +339,8 @@ def _validate_history_ids(
     ]
     if len(message_ids) != len(set(message_ids)):
         raise ValueError("recent_history 的 message_id 不能重复")
+    if current_message_id is not None and current_message_id in message_ids:
+        raise ValueError("当前消息和 recent_history 的 message_id 不能重复")
 
     group_ids = [group.group_id for group in groups]
     if len(group_ids) != len(set(group_ids)):

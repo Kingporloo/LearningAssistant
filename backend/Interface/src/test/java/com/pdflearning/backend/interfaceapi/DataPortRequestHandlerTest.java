@@ -74,4 +74,31 @@ class DataPortRequestHandlerTest {
                 IllegalArgumentException.class,
                 () -> DataPortRequestHandler.memoryQuery(context, body));
     }
+
+    @Test
+    void mapsContextSummaryWithoutRequiringMessageId() throws Exception {
+        var compactContext = new InternalRequestContext(
+                "dev_user",
+                "session_20260908_101112_dev_user",
+                "compact-request-1",
+                null);
+        var command = DataPortRequestHandler.contextSummary(
+                compactContext,
+                mapper.readTree("""
+                        {
+                          "operation_id":"compact:compact-request-1",
+                          "base_version":2,
+                          "history_cursor":"cursor-1",
+                          "through_message_id":"assistant-5",
+                          "source_refs":[{"kind":"message","ref_id":"assistant-5"}],
+                          "text":"压缩后的会话摘要"
+                        }
+                        """));
+
+        assertEquals("dev_user", command.userId());
+        assertEquals("compact-request-1", command.requestId());
+        assertEquals(2, command.baseVersion());
+        assertEquals("assistant-5", command.throughMessageId());
+        assertEquals(1, command.sourceRefs().size());
+    }
 }

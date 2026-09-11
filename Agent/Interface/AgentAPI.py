@@ -137,7 +137,7 @@ def get_compact_builder(
             mcp_client=None,
             count_tokens=assistant.count_tokens,
             count_request=assistant.count_request,
-            embed_texts=_embedding_model().embed_documents,
+            embed_texts=_embed_texts,
             summary_model=assistant.model,
             backend_client=_backend_client(),
         )
@@ -324,6 +324,10 @@ def _backend_client() -> BackendClient:
 @lru_cache(maxsize=1)
 def _embedding_model() -> EmbeddingModel:
     return EmbeddingModel(os.getenv("AGENT_EMBEDDING_MODEL", "jinaai/jina-embeddings-v2-base-zh"))
+
+
+def _embed_texts(texts: list[str]) -> list[list[float]]:
+    return _embedding_model().embed_documents(texts)
 
 
 __all__ = [

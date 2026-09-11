@@ -11,6 +11,7 @@ public final class DataPortResources implements AutoCloseable {
     private final HikariDataSource dataSource;
     private final Neo4jGraphStore graphStore;
     private final AgentRunDataPort agentRuns;
+    private final ContextSummaryDataPort contextSummaries;
     private final MemoryDataPort memory;
     private final RagDataPort rag;
 
@@ -18,11 +19,13 @@ public final class DataPortResources implements AutoCloseable {
             HikariDataSource dataSource,
             Neo4jGraphStore graphStore,
             AgentRunDataPort agentRuns,
+            ContextSummaryDataPort contextSummaries,
             MemoryDataPort memory,
             RagDataPort rag) {
         this.dataSource = dataSource;
         this.graphStore = graphStore;
         this.agentRuns = agentRuns;
+        this.contextSummaries = contextSummaries;
         this.memory = memory;
         this.rag = rag;
     }
@@ -74,6 +77,7 @@ public final class DataPortResources implements AutoCloseable {
                     dataSource,
                     graph,
                     new AgentRunDataPort(dataSource),
+                    new ContextSummaryDataPort(dataSource),
                     new MemoryDataPort(mysql, qdrant, graph, vectorDimension),
                     new RagDataPort(mysql, milvus, graph, vectorDimension));
         } catch (RuntimeException exception) {
@@ -88,6 +92,10 @@ public final class DataPortResources implements AutoCloseable {
 
     public AgentRunDataPort agentRuns() {
         return agentRuns;
+    }
+
+    public ContextSummaryDataPort contextSummaries() {
+        return contextSummaries;
     }
 
     public RagDataPort rag() {

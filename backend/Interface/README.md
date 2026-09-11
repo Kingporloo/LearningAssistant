@@ -14,6 +14,7 @@
 | `POST /internal/storage/memory/query` | 用户级长期记忆查询 |
 | `POST /internal/storage/memory/store` | 长期记忆新增或纠正 |
 | `POST /internal/storage/memory/forget` | 长期记忆删除 |
+| `POST /internal/storage/context/summary` | 会话摘要的版本化、幂等保存 |
 
 请求格式与 Python `Agent/Interface/BackendClient.py` 保持一致。每个请求必须同时
 携带以下请求头和同名 JSON 字段，两个位置的值必须一致：
@@ -54,7 +55,9 @@ Python 侧将 `JAVA_STORAGE_BASE_URL` 设置为 `http://127.0.0.1:8080`。服务
 
 ## Java 调用 Python Agent
 
-`AgentSseClient` 调用 Python 的 `POST /internal/agent/runs`。它负责：
+`AgentControlClient.createSession` 取得 Python 生成的 session ID；
+`compactContext` 提交可信历史快照并解析手动 Compact 结果。
+`AgentSseClient.openRun` 调用 `POST /internal/agent/runs` 并打开事件流。运行调用负责：
 
 - 将 `AgentRunRequest` 序列化为 Python `AgentRunRequest` 接受的 JSON；
 - 绑定内部 Bearer token 和四个可信运行标识请求头；
