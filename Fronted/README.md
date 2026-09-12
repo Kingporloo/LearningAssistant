@@ -1,5 +1,15 @@
 # React + TypeScript + Vite
 
+## 后端接口配置
+
+前端默认使用 Mock。联调用户服务时复制 `.env.example` 为 `.env.local`，设置
+`VITE_USE_MOCK=false`。`VITE_USER_API_BASE_URL` 指向 UserServer，Agent 网关可以通过
+`VITE_API_BASE_URL` 单独配置；统一网关部署时将两者设为同一地址。
+
+当前本地默认端口为：UserServer `http://127.0.0.1:8081`，AgentGatewayServer
+`http://127.0.0.1:8082`。真实聊天请求会把前端创建的 `request_id` 和
+`message_id` 一并发送，用于 Java 运行幂等和消息关联。
+
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 
 Currently, two official plugins are available:

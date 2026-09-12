@@ -1,10 +1,9 @@
 package com.pdflearning.backend.user;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.pdflearning.backend.dataport.MySqlDataPortResources;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -21,21 +20,23 @@ import java.util.concurrent.Executors;
  * - USER_SERVICE_HOST（默认 127.0.0.1）、USER_SERVICE_PORT（默认 8081）
  * - USER_TOKEN_TTL_HOURS（默认 168，即 7 天）
  * - USER_ALLOWED_ORIGIN（默认 http://localhost:5173，跨域白名单）
+ *
+ * 用户表由 DataPort 的 V4__user.sql 在部署阶段初始化。
  */
 public final class UserServer implements AutoCloseable {
     private static final int MAX_REQUEST_BYTES = 64 * 1024;
 
     private final HttpServer server;
     private final ExecutorService executor;
-    private final HikariDataSource dataSource;
+    private final MySqlDataPortResources resources;
 
     private UserServer(
             HttpServer server,
             ExecutorService executor,
-            HikariDataSource dataSource) {
+            MySqlDataPortResources resources) {
         this.server = server;
         this.executor = executor;
-        this.dataSource = dataSource;
+        this.resources = resources;
     }
 
     public static UserServer fromEnvironment() {
@@ -43,33 +44,23 @@ public final class UserServer implements AutoCloseable {
     }
 
     static UserServer from(Map<String, String> environment) {
-        var jdbcUrl = required(environment, "MYSQL_JDBC_URL");
-        var mysqlUser = required(environment, "MYSQL_USER");
-        var mysqlPassword = required(environment, "MYSQL_PASSWORD");
         var host = environment.getOrDefault("USER_SERVICE_HOST", "127.0.0.1");
         var port = integer(environment, "USER_SERVICE_PORT", 8081);
         var tokenTtl = Duration.ofHours(integer(environment, "USER_TOKEN_TTL_HOURS", 168));
         var allowedOrigin = environment.getOrDefault("USER_ALLOWED_ORIGIN", "http://localhost:5173");
 
-        var hikari = new HikariConfig();
-        hikari.setJdbcUrl(jdbcUrl);
-        hikari.setUsername(mysqlUser);
-        hikari.setPassword(mysqlPassword);
-        hikari.setMaximumPoolSize(integer(environment, "MYSQL_POOL_SIZE", 5));
-        hikari.setMinimumIdle(0);
-        hikari.setPoolName("pdf-learning-user");
-        var dataSource = new HikariDataSource(hikari);
+        var resources = MySqlDataPortResources.fromEnvironment(environment);
 
         try {
-            var service = new UserService(new MySqlUserStore(dataSource), tokenTtl);
+            var service = new UserService(resources.users(), tokenTtl);
             var handler = new UserRequestHandler(service, new ObjectMapper());
             var server = HttpServer.create(new InetSocketAddress(host, port), 0);
-            var application = new UserServer(server, Executors.newVirtualThreadPerTaskExecutor(), dataSource);
+            var application = new UserServer(server, Executors.newVirtualThreadPerTaskExecutor(), resources);
             server.createContext("/", exchange -> application.handle(exchange, allowedOrigin, handler));
             server.setExecutor(application.executor);
             return application;
         } catch (IOException | RuntimeException exception) {
-            dataSource.close();
+            resources.close();
             throw new IllegalStateException("无法启动用户服务", exception);
         }
     }
@@ -89,7 +80,7 @@ public final class UserServer implements AutoCloseable {
     public void close() {
         server.stop(0);
         executor.close();
-        dataSource.close();
+        resources.close();
     }
 
     private void handle(HttpExchange exchange, String allowedOrigin, UserRequestHandler handler) {
@@ -119,12 +110,15 @@ public final class UserServer implements AutoCloseable {
         }
     }
 
-    private boolean applyCors(HttpExchange exchange, String allowedOrigin) throws IOException {
+    private boolean applyCors(HttpExchange exchange, String allowedOrigin) {
         var origin = exchange.getRequestHeaders().getFirst("Origin");
         if (origin == null || !allowedOrigin.equals(origin)) {
             return false;
         }
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", origin);
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Authorization, Content-Type");
+        exchange.getResponseHeaders().set("Access-Control-Max-Age", "600");
         exchange.getResponseHeaders().set("Vary", "Origin");
         return true;
     }
@@ -166,14 +160,6 @@ public final class UserServer implements AutoCloseable {
                 .replace("\\", "\\\\")
                 .replace("\"", "\\\"");
         return "\"" + escaped + "\"";
-    }
-
-    private static String required(Map<String, String> environment, String name) {
-        var value = environment.get(name);
-        if (value == null || value.isBlank()) {
-            throw new IllegalStateException("缺少环境变量 " + name);
-        }
-        return value;
     }
 
     private static int integer(Map<String, String> environment, String name, int defaultValue) {

@@ -4,6 +4,7 @@
  * .env.local:
  *   VITE_USE_MOCK=false
  *   VITE_API_BASE_URL=/api
+ *   VITE_USER_API_BASE_URL=http://127.0.0.1:8081
  */
 
 import type { ApiClient } from './client'

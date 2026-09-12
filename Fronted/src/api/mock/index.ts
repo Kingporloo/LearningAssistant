@@ -161,7 +161,7 @@ export function createMockApiClient(): ApiClient {
     // ---- 聊天 ----
 
     runChat(params: ChatRunParams): ChatRunHandle {
-      const { sessionId, message, onEvent, signal } = params
+      const { sessionId, requestId, messageId, message, onEvent, signal } = params
       const controller = new AbortController()
       const onAbort = () => controller.abort()
       signal.addEventListener('abort', onAbort, { once: true })
@@ -176,7 +176,7 @@ export function createMockApiClient(): ApiClient {
         // 持久化用户消息
         const isFirstMessage = db.listMessages(userId, sessionId).length === 0
         const userMessage: ChatMessage = {
-          id: id('msg'),
+          id: messageId,
           role: 'user',
           content: message,
           createdAt: new Date().toISOString(),
@@ -196,9 +196,6 @@ export function createMockApiClient(): ApiClient {
 
         const consume = (event: AgentEventEnvelope) => {
           switch (event.type) {
-            case 'run_started':
-              assistantId = String(event.payload.message_id ?? assistantId)
-              break
             case 'text_delta': {
               const delta = String(event.payload.delta ?? '')
               const step = Number(event.payload.model_step ?? 1)
@@ -254,6 +251,8 @@ export function createMockApiClient(): ApiClient {
             db,
             userId,
             sessionId,
+            requestId,
+            messageId,
             message,
             signal: controller.signal,
           })) {

@@ -1,11 +1,11 @@
 /**
- * 真实网关客户端（预留）。网关上线后在 .env 设 VITE_USE_MOCK=false
- * 并配置 VITE_API_BASE_URL 即可切换，契约见 types.ts。
+ * 真实服务客户端。联调时在 .env 设 VITE_USE_MOCK=false，UserServer 与 Agent
+ * 网关可分别通过 VITE_USER_API_BASE_URL、VITE_API_BASE_URL 配置。
  *
  * 约定（对齐后端设计）：
  * - 认证：Authorization: Bearer <token>
  * - 聊天：POST /sessions/:id/runs，响应为 text/event-stream，
- *   事件名与 data 结构和 Python AgentLoop 输出一致
+ *   请求携带稳定 request_id / message_id，事件与 Python AgentLoop 输出一致
  */
 
 import type {
@@ -26,11 +26,16 @@ import type {
 } from './client'
 import { ApiRequestError, getToken } from './client'
 
-const BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? '/api'
+const AGENT_BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? '/api'
+const USER_BASE_URL: string = import.meta.env.VITE_USER_API_BASE_URL ?? AGENT_BASE_URL
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  baseUrl: string = AGENT_BASE_URL,
+): Promise<T> {
   const token = getToken()
-  const response = await fetch(`${BASE_URL}${path}`, {
+  const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
@@ -63,6 +68,7 @@ async function consumeSse(
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let terminal = false
   try {
     for (;;) {
       if (signal.aborted) throw new DOMException('已中止', 'AbortError')
@@ -81,13 +87,20 @@ async function consumeSse(
           else if (line.startsWith('data:')) data += line.slice(5).trim()
         }
         if (data) {
+          let parsed: unknown
           try {
-            onEvent({ type, data: JSON.parse(data) })
+            parsed = JSON.parse(data)
           } catch {
             // 跳过无法解析的块
+            continue
           }
+          onEvent({ type, data: parsed })
+          terminal = terminal || type === 'run_finished'
         }
       }
+    }
+    if (!terminal) {
+      throw new ApiRequestError(502, 'Agent 事件流未正常结束')
     }
   } finally {
     reader.releaseLock()
@@ -97,39 +110,55 @@ async function consumeSse(
 export function createRealApiClient(): ApiClient {
   return {
     async register(req: RegisterRequest): Promise<AuthResult> {
-      return request('/auth/register', {
-        method: 'POST',
-        body: JSON.stringify(req),
-      })
+      return request(
+        '/auth/register',
+        {
+          method: 'POST',
+          body: JSON.stringify(req),
+        },
+        USER_BASE_URL,
+      )
     },
 
     async login(req: LoginRequest): Promise<AuthResult> {
-      return request('/auth/login', {
-        method: 'POST',
-        body: JSON.stringify(req),
-      })
+      return request(
+        '/auth/login',
+        {
+          method: 'POST',
+          body: JSON.stringify(req),
+        },
+        USER_BASE_URL,
+      )
     },
 
     async logout(): Promise<void> {
-      await request('/auth/logout', { method: 'POST' })
+      await request('/auth/logout', { method: 'POST' }, USER_BASE_URL)
     },
 
     async me(): Promise<User> {
-      return request('/auth/me')
+      return request('/auth/me', undefined, USER_BASE_URL)
     },
 
     async updateProfile(req: UpdateProfileRequest): Promise<User> {
-      return request('/users/me', {
-        method: 'PATCH',
-        body: JSON.stringify(req),
-      })
+      return request(
+        '/users/me',
+        {
+          method: 'PATCH',
+          body: JSON.stringify(req),
+        },
+        USER_BASE_URL,
+      )
     },
 
     async changePassword(req: ChangePasswordRequest): Promise<void> {
-      await request('/users/me/password', {
-        method: 'POST',
-        body: JSON.stringify(req),
-      })
+      await request(
+        '/users/me/password',
+        {
+          method: 'POST',
+          body: JSON.stringify(req),
+        },
+        USER_BASE_URL,
+      )
     },
 
     async listSessions(): Promise<SessionInfo[]> {
@@ -152,7 +181,7 @@ export function createRealApiClient(): ApiClient {
     },
 
     runChat(params: ChatRunParams): ChatRunHandle {
-      const { sessionId, message, onEvent, signal } = params
+      const { sessionId, requestId, messageId, message, onEvent, signal } = params
       const controller = new AbortController()
       const onAbort = () => controller.abort()
       signal.addEventListener('abort', onAbort, { once: true })
@@ -162,7 +191,7 @@ export function createRealApiClient(): ApiClient {
         try {
           const token = getToken()
           const response = await fetch(
-            `${BASE_URL}/sessions/${sessionId}/runs`,
+            `${AGENT_BASE_URL}/sessions/${sessionId}/runs`,
             {
               method: 'POST',
               headers: {
@@ -170,7 +199,11 @@ export function createRealApiClient(): ApiClient {
                 Accept: 'text/event-stream',
                 ...(token ? { Authorization: `Bearer ${token}` } : {}),
               },
-              body: JSON.stringify({ message }),
+              body: JSON.stringify({
+                message,
+                request_id: requestId,
+                message_id: messageId,
+              }),
               signal: controller.signal,
             },
           )
@@ -216,7 +249,7 @@ export function createRealApiClient(): ApiClient {
       const token = getToken()
       const form = new FormData()
       form.append('file', file)
-      const response = await fetch(`${BASE_URL}/documents`, {
+      const response = await fetch(`${AGENT_BASE_URL}/documents`, {
         method: 'POST',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: form,

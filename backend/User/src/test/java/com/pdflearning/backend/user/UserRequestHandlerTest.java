@@ -1,9 +1,11 @@
 package com.pdflearning.backend.user;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.pdflearning.backend.dataport.UserDataPort;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Random;
@@ -21,11 +23,8 @@ class UserRequestHandlerTest {
 
     @BeforeEach
     void setUp() {
-        var dataSource = new JdbcDataSource();
-        dataSource.setURL("jdbc:h2:mem:" + System.nanoTime()
-                + ";MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1");
         service = new UserService(
-                new MySqlUserStore(dataSource),
+                UserTestDatabase.create(),
                 new PasswordHasher(),
                 Clock.systemUTC(),
                 Duration.ofDays(7),
@@ -89,6 +88,19 @@ class UserRequestHandlerTest {
 
         var noToken = handler.handle("GET", "auth/me", body("{}"), null);
         assertEquals(401, noToken.statusCode());
+
+        var numericPassword = handler.handle("POST", "auth/register", body("""
+                {"username":"typed_user","password":123456}
+                """), null);
+        assertEquals(400, numericPassword.statusCode());
+        assertEquals("password 必须是字符串", errorMessage(numericPassword));
+
+        var wrongLogoutMethod = handler.handle("GET", "auth/logout", body("{}"), null);
+        assertEquals(405, wrongLogoutMethod.statusCode());
+
+        var wrongMeMethod = handler.handle("POST", "auth/me", body("{}"), null);
+        assertEquals(405, wrongMeMethod.statusCode());
+        assertEquals("GET", wrongMeMethod.allowHeader());
     }
 
     @Test
@@ -108,6 +120,30 @@ class UserRequestHandlerTest {
                 """), token);
         assertEquals(200, good.statusCode());
         assertEquals("ok", mapper().readTree(good.bodyJson()).path("status").asText());
+    }
+
+    @Test
+    void parseBodyRequiresJsonObject() {
+        var error = assertThrows(
+                UserServiceException.class,
+                () -> handler.parseBody("[]".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        assertEquals(400, error.statusCode());
+    }
+
+    @Test
+    void dataPortFailureUsesStablePublicMessage() throws Exception {
+        var dataSource = new JdbcDataSource();
+        dataSource.setURL("jdbc:h2:mem:missing_" + System.nanoTime());
+        var failingHandler = new UserRequestHandler(
+                new UserService(new UserDataPort(dataSource), Duration.ofDays(7)),
+                new ObjectMapper());
+
+        var response = failingHandler.handle("POST", "auth/register", body("""
+                {"username":"database_test","password":"secret123"}
+                """), null);
+
+        assertEquals(503, response.statusCode());
+        assertEquals("用户数据服务暂时不可用", errorMessage(response));
     }
 
     // ---------- 工具 ----------

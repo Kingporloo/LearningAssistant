@@ -31,6 +31,52 @@ class InternalRequestContextTest {
     }
 
     @Test
+    void acceptsUserServiceIdentity() throws Exception {
+        var userId = "user_20260912_103040_1a2b3c4d";
+        var sessionId = "session_20260912_103100_" + userId;
+        var context = InternalRequestContext.authenticate(
+                headers("Bearer internal-token", userId, sessionId),
+                mapper.readTree("""
+                        {
+                          "user_id":"user_20260912_103040_1a2b3c4d",
+                          "session_id":"session_20260912_103100_user_20260912_103040_1a2b3c4d",
+                          "request_id":"request-1",
+                          "message_id":"message-1"
+                        }
+                        """),
+                "internal-token");
+
+        assertEquals(userId, context.userId());
+        assertEquals(sessionId, context.sessionId());
+    }
+
+    @Test
+    void rejectsUnsafeUserIdentity() throws Exception {
+        assertThrows(IllegalArgumentException.class, () -> InternalRequestContext.authenticate(
+                headers("Bearer internal-token", "../user", "session_20260912_103100_../user"),
+                mapper.readTree("""
+                        {
+                          "user_id":"../user",
+                          "session_id":"session_20260912_103100_../user",
+                          "request_id":"request-1",
+                          "message_id":"message-1"
+                        }
+                        """),
+                "internal-token"));
+    }
+
+    @Test
+    void rejectsNonTextMessageId() throws Exception {
+        var body = mapper.readTree(validBody());
+        ((com.fasterxml.jackson.databind.node.ObjectNode) body).put("message_id", 1);
+
+        assertThrows(IllegalArgumentException.class, () -> InternalRequestContext.authenticate(
+                headers("Bearer internal-token", "dev_user", "session_20260908_101112_dev_user"),
+                body,
+                "internal-token"));
+    }
+
+    @Test
     void rejectsInvalidToken() throws Exception {
         assertThrows(SecurityException.class, () -> InternalRequestContext.authenticate(
                 headers("Bearer wrong", "dev_user", "session_20260908_101112_dev_user"),

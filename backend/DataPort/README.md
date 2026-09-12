@@ -8,7 +8,7 @@ Controller。`backend/Interface` 负责认证、开发期会话校验和 JSON �
 
 | 存储 | 用途 |
 |---|---|
-| MySQL | 长期记忆正文、RAG 文档状态，以及 Agent 会话、运行和原始 SSE 事件 |
+| MySQL | 用户、登录令牌、长期记忆正文、RAG 文档状态，以及 Agent 会话、运行和原始 SSE 事件 |
 | Qdrant | semantic / episodic 长期记忆向量索引，所有请求带 `user_id` payload filter |
 | Milvus | RAG 分块正文和向量，检索及正文回查都限定 `user_id` 与 ready document_id |
 | Neo4j | RAG 分块关系和语义记忆实体关系，节点身份包含 `user_id` |
@@ -19,7 +19,8 @@ Working Memory 仍在 Python 进程内按 `user_id + session_id` 管理，不进
 ## 初始化
 
 1. 在 MySQL 依次执行 `src/main/resources/db/migration/V1__data_port.sql`、
-   `V2__agent_run.sql` 和 `V3__context_summary.sql`。
+   `V2__agent_run.sql`、`V3__context_summary.sql`、`V4__user.sql` 和
+   `V5__chat.sql`。
 2. 在 Neo4j 执行 `src/main/resources/db/neo4j-schema.cypher`。
 3. 创建 Qdrant collection，默认名 `agent_memory_dev`，使用 768 维 Cosine 向量，
    并为 `user_id`、`status`、`memory_type`、`memory_id` 建 keyword payload index。
@@ -29,7 +30,7 @@ Working Memory 仍在 Python 进程内按 `user_id + session_id` 管理，不进
    使用 COSINE，`user_id` 和 `document_id` 是标量过滤字段。
 
 Docker Compose 的初始化脚本只会在全新的 MySQL 数据卷上自动执行。已有开发数据卷
-需要手动执行新增的 `V3__context_summary.sql`。
+需要手动执行尚未应用的 migration。
 
 维度 768 与当前 Python 嵌入模型 `jinaai/jina-embeddings-v2-base-zh` 一致。更换模型时必须
 先建立新的开发 collection，不能把不同维度或不同模型的向量混入同一索引。
@@ -67,9 +68,10 @@ DATA_PORT_TIMEOUT_SECONDS=15
 Milvus collection。若现有 collection 按旧模型创建为其他维度，应新建 768 维
 collection 并修改上述 collection 名称；旧向量不能直接复用，需要用新模型重新生成。
 
-开发身份由 `backend/User` 提供，当前固定为 `dev_user`；session ID 格式为
-`session_yyyyMMdd_HHmmss_dev_user`。DataPort 不生成或信任默认身份，所有调用方
-都必须显式传入非空 user ID。
+正式身份由 `backend/User` 分配，`dev_user` 只保留给开发测试；session ID 格式为
+`session_yyyyMMdd_HHmmss_<user_id>`。DataPort 不生成或信任默认身份，所有调用方
+都必须显式传入非空 user ID。用户表和令牌表由 `V4__user.sql` 初始化，User 模块
+通过 `UserDataPort` 访问，不直接执行 JDBC 或建表。
 
 ## Agent 运行与事件
 
@@ -82,6 +84,8 @@ collection 并修改上述 collection 名称；旧向量不能直接复用，需
 | `agent_run_event` | `user_id + request_id + event_seq` | 保存 Python 发出的完整事件 JSON |
 | `session_summary` | `user_id + session_id` | 保存当前会话摘要及版本 |
 | `context_summary_operation` | `user_id + request_id + operation_id` | 保存摘要写入的幂等结果 |
+| `chat_session` | 全局唯一 `session_id` | 保存正式会话归属、标题和删除状态 |
+| `chat_message` | 全局唯一 `message_id` | 保存用户可见问答及助手工具时间线 |
 
 同一 request ID 只有用户消息摘要、session ID 和 message ID 全部一致时才视为重试。
 历史、摘要和运行配置是 Java 派生的执行快照，不参与重试判断，避免运行完成后历史变化

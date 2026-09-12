@@ -5,24 +5,21 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.pdflearning.backend.dataport.UserDataPort;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Random;
-import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class UserServiceTest {
-    private MySqlUserStore store;
+    private UserDataPort store;
     private UserService service;
 
     @BeforeEach
     void setUp() {
-        var dataSource = new JdbcDataSource();
-        dataSource.setURL("jdbc:h2:mem:" + System.nanoTime()
-                + ";MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1");
-        store = new MySqlUserStore(dataSource);
+        store = UserTestDatabase.create();
         service = new UserService(
                 store, new PasswordHasher(), Clock.systemUTC(), Duration.ofDays(7), new Random(7));
     }
@@ -59,6 +56,7 @@ class UserServiceTest {
         assertInvalid(() -> service.register("ab", "secret123", null), "用户名");
         assertInvalid(() -> service.register("中文名字", "secret123", null), "用户名");
         assertInvalid(() -> service.register("carol", "12345", null), "密码");
+        assertInvalid(() -> service.register("carol", "      ", null), "密码");
         assertInvalid(() -> service.register("carol", "secret123", "x".repeat(25)), "昵称");
     }
 
@@ -144,6 +142,9 @@ class UserServiceTest {
         assertInvalid(() -> service.changePassword(
                 service.authenticate(firstToken).userId(), firstToken, "wrong-old", "newpass456"),
                 "旧密码");
+        assertInvalid(() -> service.changePassword(
+                service.authenticate(firstToken).userId(), firstToken, "secret123", "      "),
+                "密码");
 
         service.changePassword(service.authenticate(firstToken).userId(), firstToken, "secret123", "newpass456");
 

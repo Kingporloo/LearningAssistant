@@ -1,7 +1,6 @@
 package com.pdflearning.backend.interfaceapi;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.pdflearning.backend.user.DevIdentity;
 import com.sun.net.httpserver.Headers;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -13,6 +12,7 @@ record InternalRequestContext(
         String sessionId,
         String requestId,
         String messageId) {
+    private static final Pattern USER_ID = Pattern.compile("[A-Za-z0-9_-]{1,128}");
 
     static InternalRequestContext authenticate(
             Headers headers,
@@ -36,8 +36,8 @@ record InternalRequestContext(
         matchBody(body, "request_id", requestId);
         matchOptionalBody(body, "message_id", messageId);
 
-        if (!DevIdentity.USER_ID.equals(userId)) {
-            throw new SecurityException("当前开发环境只允许 dev_user");
+        if (!USER_ID.matcher(userId).matches()) {
+            throw new IllegalArgumentException("user_id 格式无效");
         }
         var expectedSession = Pattern.compile(
                 "session_\\d{8}_\\d{6}_" + Pattern.quote(userId));
@@ -77,7 +77,10 @@ record InternalRequestContext(
 
     private static void matchOptionalBody(JsonNode body, String name, String expected) {
         var value = body.get(name);
-        var actual = value == null || value.isNull() ? null : value.asText(null);
+        if (value != null && !value.isNull() && !value.isTextual()) {
+            throw new IllegalArgumentException(name + " 必须是字符串");
+        }
+        var actual = value == null || value.isNull() ? null : value.textValue();
         if (!Objects.equals(expected, actual)) {
             throw new IllegalArgumentException(name + " 必须与可信请求头一致");
         }

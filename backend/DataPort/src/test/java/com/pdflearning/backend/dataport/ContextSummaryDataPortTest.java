@@ -24,6 +24,11 @@ class ContextSummaryDataPortTest {
         assertEquals(mapper.valueToTree(first), mapper.valueToTree(replay));
         assertEquals(1, summaryVersion());
         assertEquals(1, operationCount());
+        var stored = dataPort.find("dev_user", sessionId()).orElseThrow();
+        assertEquals("压缩后的摘要", stored.text());
+        assertEquals("assistant-5", stored.throughMessageId());
+        assertEquals("cursor-1", stored.historyCursor());
+        assertEquals(1, stored.sourceRefs().size());
     }
 
     @Test

@@ -28,6 +28,8 @@ export class ApiRequestError extends Error {
 
 export interface ChatRunParams {
   sessionId: string
+  requestId: string
+  messageId: string
   message: string
   onEvent: (event: AgentEventEnvelope) => void
   signal: AbortSignal

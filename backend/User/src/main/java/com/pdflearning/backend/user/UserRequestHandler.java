@@ -3,6 +3,7 @@ package com.pdflearning.backend.user;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.pdflearning.backend.dataport.DataPortException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.format.DateTimeFormatter;
@@ -33,6 +34,10 @@ public final class UserRequestHandler {
             // 目前仅 POST-only 路由会产生 405
             var allow = exception.statusCode() == 405 ? "POST" : null;
             return new Response(exception.statusCode(), node.toString(), allow);
+        } catch (DataPortException exception) {
+            var node = mapper.createObjectNode();
+            node.put("message", "用户数据服务暂时不可用");
+            return new Response(503, node.toString(), null);
         }
     }
 
@@ -46,17 +51,25 @@ public final class UserRequestHandler {
                 requirePost(method);
                 yield ok(login(body));
             }
-            case "auth/logout" -> ok(authenticated(authorization, (user, token) -> {
-                service.logout(token);
-                return statusOk();
-            }));
-            case "auth/me" -> ok(authenticated(authorization, (user, token) -> userNode(user)));
+            case "auth/logout" -> {
+                requirePost(method);
+                yield ok(authenticated(authorization, (user, token) -> {
+                    service.logout(token);
+                    return statusOk();
+                }));
+            }
+            case "auth/me" -> {
+                if (!"GET".equals(method)) {
+                    yield methodNotAllowed("GET");
+                }
+                yield ok(authenticated(authorization, (user, token) -> userNode(user)));
+            }
             case "users/me" -> {
                 if (!"PATCH".equals(method)) {
                     yield methodNotAllowed("PATCH");
                 }
                 yield ok(authenticated(authorization, (user, token) ->
-                        userNode(service.updateNickname(user.userId(), body.path("nickname").asText(null)))));
+                        userNode(service.updateNickname(user.userId(), textOrNull(body, "nickname")))));
             }
             case "users/me/password" -> {
                 requirePost(method);
@@ -122,7 +135,13 @@ public final class UserRequestHandler {
 
     private static String textOrNull(JsonNode body, String field) {
         var value = body.get(field);
-        return value == null || value.isNull() ? null : value.asText(null);
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        if (!value.isTextual()) {
+            throw new UserServiceException(400, field + " 必须是字符串");
+        }
+        return value.textValue();
     }
 
     private static String bearerToken(String authorization) {
@@ -163,6 +182,10 @@ public final class UserRequestHandler {
         if (raw.length == 0) {
             return mapper.createObjectNode();
         }
-        return mapper.readTree(new String(raw, StandardCharsets.UTF_8));
+        var body = mapper.readTree(new String(raw, StandardCharsets.UTF_8));
+        if (body == null || !body.isObject()) {
+            throw new UserServiceException(400, "请求正文必须是 JSON 对象");
+        }
+        return body;
     }
 }

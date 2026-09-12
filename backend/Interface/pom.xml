@@ -13,12 +13,12 @@
     <dependencies>
         <dependency>
             <groupId>com.pdflearning.backend</groupId>
-            <artifactId>data-port</artifactId>
+            <artifactId>user</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>com.pdflearning.backend</groupId>
-            <artifactId>user</artifactId>
+            <artifactId>data-port</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

@@ -77,7 +77,12 @@ function applyEvent(
           ...segment,
           toolCall: {
             ...segment.toolCall,
-            status: payload.outcome === 'completed' ? 'completed' : 'error',
+            status:
+              payload.outcome === 'completed'
+                ? 'completed'
+                : payload.outcome === 'skipped'
+                  ? 'skipped'
+                  : 'error',
             outcome: String(payload.outcome ?? ''),
             businessStatus: (payload.business_status as string | null) ?? null,
             content: String(payload.content ?? ''),
@@ -186,6 +191,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     const handle = api.runChat({
       sessionId,
+      requestId: crypto.randomUUID(),
+      messageId: userMessage.id,
       message: trimmed,
       signal: new AbortController().signal,
       onEvent: (event) => {

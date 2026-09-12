@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -16,6 +17,14 @@ import javax.sql.DataSource;
 
 /** 会话摘要的版本检查与幂等保存。 */
 public final class ContextSummaryDataPort {
+    public record StoredSummary(
+            int version,
+            String text,
+            String throughMessageId,
+            String historyCursor,
+            JsonNode sourceRefs) {
+    }
+
     public record StoreCommand(
             String userId,
             String sessionId,
@@ -47,6 +56,28 @@ public final class ContextSummaryDataPort {
         }
         this.dataSource = dataSource;
         this.mapper = mapper;
+    }
+
+    public Optional<StoredSummary> find(String userId, String sessionId) {
+        requireText(userId, "user_id");
+        requireText(sessionId, "session_id");
+        try (var connection = dataSource.getConnection();
+                var statement = connection.prepareStatement("""
+                        SELECT version, text, through_message_id, history_cursor,
+                               source_refs_json
+                        FROM session_summary
+                        WHERE user_id = ? AND session_id = ?
+                        """)) {
+            statement.setString(1, userId);
+            statement.setString(2, sessionId);
+            try (var result = statement.executeQuery()) {
+                return result.next()
+                        ? Optional.of(storedSummary(result))
+                        : Optional.empty();
+            }
+        } catch (SQLException exception) {
+            throw new DataPortException("MySQL 读取会话摘要失败", exception);
+        }
     }
 
     public Map<String, Object> store(StoreCommand command) {
@@ -124,6 +155,25 @@ public final class ContextSummaryDataPort {
                         ? Optional.of(result.getInt("version"))
                         : Optional.empty();
             }
+        }
+    }
+
+    private StoredSummary storedSummary(ResultSet result) throws SQLException {
+        try {
+            JsonNode sourceRefs = mapper.readTree(result.getString("source_refs_json"));
+            if (!sourceRefs.isArray()) {
+                throw new DataPortException("数据库中的会话摘要来源必须是 JSON 数组");
+            }
+            return new StoredSummary(
+                    result.getInt("version"),
+                    result.getString("text"),
+                    result.getString("through_message_id"),
+                    result.getString("history_cursor"),
+                    sourceRefs);
+        } catch (DataPortException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new DataPortException("数据库中的会话摘要 JSON 无效", exception);
         }
     }
 

@@ -17,6 +17,8 @@ export interface MockAgentParams {
   db: MockDb
   userId: string
   sessionId: string
+  requestId: string
+  messageId: string
   message: string
   signal: AbortSignal
 }
@@ -43,8 +45,8 @@ export async function* mockAgentEvents(
   params: MockAgentParams,
 ): AsyncGenerator<AgentEventEnvelope> {
   const { db, userId, message, signal } = params
-  const request_id = id('req')
-  const message_id = id('msg')
+  const request_id = params.requestId
+  const message_id = params.messageId
   let seq = 0
   let modelSteps = 0
   let toolRounds = 0

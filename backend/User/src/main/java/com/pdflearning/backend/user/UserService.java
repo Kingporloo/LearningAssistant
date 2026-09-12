@@ -1,5 +1,6 @@
 package com.pdflearning.backend.user;
 
+import com.pdflearning.backend.dataport.UserDataPort;
 import java.security.MessageDigest;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
@@ -22,18 +23,18 @@ public final class UserService {
     static final int MIN_PASSWORD_LENGTH = 6;
     static final int NICKNAME_MAX_LENGTH = 24;
 
-    private final MySqlUserStore store;
+    private final UserDataPort store;
     private final PasswordHasher hasher;
     private final Clock clock;
     private final Duration tokenTtl;
     private final RandomGenerator random;
 
-    public UserService(MySqlUserStore store, Duration tokenTtl) {
+    public UserService(UserDataPort store, Duration tokenTtl) {
         this(store, new PasswordHasher(), Clock.systemUTC(), tokenTtl, new SecureRandom());
     }
 
     UserService(
-            MySqlUserStore store,
+            UserDataPort store,
             PasswordHasher hasher,
             Clock clock,
             Duration tokenTtl,
@@ -66,8 +67,13 @@ public final class UserService {
                 hasher.hash(password),
                 now,
                 now);
-        store.insertUser(user);
-        return new AuthResult(issueToken(user.userId()), user.withoutSecrets());
+        var token = randomToken();
+        var created = store.register(
+                userData(user), tokenHash(token), now.plus(tokenTtl));
+        if (!created) {
+            throw new UserServiceException(409, "用户名已被占用");
+        }
+        return new AuthResult(token, user.withoutSecrets());
     }
 
     public AuthResult login(String username, String password) {
@@ -75,6 +81,7 @@ public final class UserService {
             throw new UserServiceException(400, "用户名和密码不能为空");
         }
         var user = store.findByUsername(username)
+                .map(UserService::userRecord)
                 .orElseThrow(() -> new UserServiceException(401, "用户名或密码错误"));
         if (!hasher.verify(password, user.passwordHash())) {
             throw new UserServiceException(401, "用户名或密码错误");
@@ -88,6 +95,7 @@ public final class UserService {
             throw new UserServiceException(401, "缺少登录令牌");
         }
         return store.findUserByTokenHash(tokenHash(token), now())
+                .map(UserService::userRecord)
                 .orElseThrow(() -> new UserServiceException(401, "登录已过期，请重新登录"));
     }
 
@@ -108,6 +116,7 @@ public final class UserService {
         }
         store.updateNickname(userId, trimmed, now());
         return store.findByUserId(userId)
+                .map(UserService::userRecord)
                 .orElseThrow(() -> new UserServiceException(404, "用户不存在"))
                 .withoutSecrets();
     }
@@ -115,13 +124,14 @@ public final class UserService {
     /** 修改密码；成功后吊销该用户其余会话，仅保留当前令牌。 */
     public void changePassword(String userId, String currentToken, String oldPassword, String newPassword) {
         var user = store.findByUserId(userId)
+                .map(UserService::userRecord)
                 .orElseThrow(() -> new UserServiceException(404, "用户不存在"));
         if (oldPassword == null || oldPassword.isBlank() || !hasher.verify(oldPassword, user.passwordHash())) {
             throw new UserServiceException(400, "旧密码不正确");
         }
         validatePassword(newPassword);
-        store.updatePasswordHash(userId, hasher.hash(newPassword), now());
-        store.deleteTokensForUserExcept(userId, tokenHash(currentToken));
+        store.changePassword(
+                userId, hasher.hash(newPassword), now(), tokenHash(currentToken));
     }
 
     // ---------- 内部工具 ----------
@@ -148,9 +158,30 @@ public final class UserService {
     }
 
     private static void validatePassword(String password) {
-        if (password == null || password.length() < MIN_PASSWORD_LENGTH) {
-            throw new UserServiceException(400, "密码至少 " + MIN_PASSWORD_LENGTH + " 位");
+        if (password == null || password.isBlank() || password.length() < MIN_PASSWORD_LENGTH) {
+            throw new UserServiceException(
+                    400, "密码至少 " + MIN_PASSWORD_LENGTH + " 位且不能全为空白字符");
         }
+    }
+
+    private static UserDataPort.UserData userData(UserRecord user) {
+        return new UserDataPort.UserData(
+                user.userId(),
+                user.username(),
+                user.nickname(),
+                user.passwordHash(),
+                user.createdAt(),
+                user.updatedAt());
+    }
+
+    private static UserRecord userRecord(UserDataPort.UserData user) {
+        return new UserRecord(
+                user.userId(),
+                user.username(),
+                user.nickname(),
+                user.passwordHash(),
+                user.createdAt(),
+                user.updatedAt());
     }
 
     private static String resolveNickname(String nickname, String fallback) {
