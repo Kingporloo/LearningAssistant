@@ -72,6 +72,7 @@ class BackendClient:
         self._client = client or httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             timeout=timeout,
+            trust_env=False,
         )
 
     @classmethod
@@ -99,6 +100,34 @@ class BackendClient:
                 path,
                 headers=headers,
                 json={**data, **context.payload()},
+            )
+            response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            error = BackendOutcomeUnknown if write else BackendError
+            raise error(f"Java 后端调用超时: {path}") from exc
+        except httpx.HTTPError as exc:
+            raise BackendError(f"Java 后端调用失败: {path}: {exc}") from exc
+
+        try:
+            result = response.json()
+        except ValueError as exc:
+            raise BackendError(f"Java 后端返回了无效 JSON: {path}") from exc
+        if not isinstance(result, dict):
+            raise BackendError(f"Java 后端响应必须是 JSON 对象: {path}")
+        return result
+
+    async def _post_service(
+        self,
+        path: str,
+        data: dict[str, Any],
+        *,
+        write: bool = False,
+    ) -> dict[str, Any]:
+        try:
+            response = await self._client.post(
+                path,
+                headers={"Authorization": f"Bearer {self._token}"},
+                json=data,
             )
             response.raise_for_status()
         except httpx.TimeoutException as exc:
@@ -195,6 +224,43 @@ class BackendClient:
                 "memory_type": memory_type,
                 "memory_id": memory_id,
             },
+            write=True,
+        )
+
+    async def memory_graph_claim(self) -> dict[str, Any]:
+        return await self._post_service(
+            "/internal/storage/memory/graph/claim",
+            {},
+            write=True,
+        )
+
+    async def memory_graph_complete(
+        self,
+        *,
+        user_id: str,
+        memory_id: str,
+        revision: int,
+        graph_status: str,
+        graph: dict[str, Any],
+        graph_error: str | None = None,
+    ) -> dict[str, Any]:
+        return await self._post_service(
+            "/internal/storage/memory/graph/complete",
+            {
+                "user_id": user_id,
+                "memory_id": memory_id,
+                "revision": revision,
+                "graph_status": graph_status,
+                "graph_error": graph_error,
+                "graph": graph,
+            },
+            write=True,
+        )
+
+    async def memory_graph_recover(self) -> dict[str, Any]:
+        return await self._post_service(
+            "/internal/storage/memory/graph/recover",
+            {},
             write=True,
         )
 

@@ -29,11 +29,7 @@ class DataPortRequestHandlerTest {
                     "session_id":"session_20260908_101112_dev_user",
                     "message_id":"message-1"
                   },
-                  "graph":{
-                    "entities":[{"name":"用户","type":"人物"}],
-                    "relations":[]
-                  },
-                  "graph_status":"ok"
+                  "graph_status":"pending"
                 }
                 """));
 
@@ -42,8 +38,27 @@ class DataPortRequestHandlerTest {
         assertEquals(0.2, command.importance());
         assertEquals(context.sessionId(), command.source().sessionId());
         assertEquals(context.messageId(), command.source().messageId());
-        assertEquals("用户", command.graph().entities().getFirst().name());
         assertNull(command.memoryId());
+    }
+
+    @Test
+    void mapsSemanticGraphCompletion() throws Exception {
+        var command = DataPortRequestHandler.memoryGraphComplete(mapper.readTree("""
+                {
+                  "user_id":"dev_user",
+                  "memory_id":"c08eae45-249a-4a89-bf70-6610f94a0563",
+                  "revision":2,
+                  "graph_status":"ok",
+                  "graph":{
+                    "entities":[{"name":"用户","type":"人物"}],
+                    "relations":[]
+                  }
+                }
+                """));
+
+        assertEquals("dev_user", command.userId());
+        assertEquals(2, command.revision());
+        assertEquals("用户", command.graph().entities().getFirst().name());
     }
 
     @Test

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hmac
 import os
 import sys
@@ -18,10 +19,13 @@ from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import Context, FastMCP
 from pydantic import Field
 
-from Agent.Interface.BackendClient import RunContext
+from Agent.Interface.BackendClient import BackendClient, RunContext
 from Agent.Tools.Memory.memory import MemoryService
+from Agent.Tools.Memory.semantic import SemanticProcessor
+from Agent.Tools.Memory.semantic_worker import SemanticMemoryWorker
 
 _service: MemoryService | None = None
+_worker: SemanticMemoryWorker | None = None
 _host = os.getenv("MEMORY_MCP_HOST", "127.0.0.1")
 _port = int(os.getenv("MEMORY_MCP_PORT", "8802"))
 
@@ -40,6 +44,23 @@ def _auth_settings() -> AuthSettings:
         issuer_url="http://internal.invalid",
         resource_server_url=f"http://{public_host}:{_port}/mcp",
     )
+
+
+async def _run_server(transport: str) -> None:
+    global _service, _worker
+    _worker = SemanticMemoryWorker(BackendClient.from_env(), SemanticProcessor())
+    _service = MemoryService(graph_job_notifier=_worker.notify)
+    _worker.start()
+    try:
+        if transport == "stdio":
+            await mcp.run_stdio_async()
+        else:
+            await mcp.run_streamable_http_async()
+    finally:
+        await _worker.aclose()
+        await _service.aclose()
+        _worker = None
+        _service = None
 
 
 def _run_context(ctx: Context) -> RunContext:
@@ -164,7 +185,7 @@ def main() -> None:
         default=os.getenv("MCP_TRANSPORT", "streamable-http"),
     )
     args = parser.parse_args()
-    mcp.run(transport=args.transport)
+    asyncio.run(_run_server(args.transport))
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 public final class MemoryDataPort {
@@ -37,7 +38,15 @@ public final class MemoryDataPort {
             double importance,
             List<Double> vector,
             Source source,
-            OffsetDateTime eventTime,
+            OffsetDateTime eventTime) {
+    }
+
+    public record CompleteGraphCommand(
+            String userId,
+            String memoryId,
+            int revision,
+            String graphStatus,
+            String graphError,
             Graph graph) {
     }
 
@@ -64,6 +73,7 @@ public final class MemoryDataPort {
     private final Neo4jGraphStore graphStore;
     private final ObjectMapper mapper;
     private final int vectorDimension;
+    private final Object[] memoryLocks = new Object[64];
 
     public MemoryDataPort(
             MySqlDataStore mysql,
@@ -84,6 +94,9 @@ public final class MemoryDataPort {
         this.graphStore = graphStore;
         this.mapper = mapper;
         this.vectorDimension = requireVectorDimension(vectorDimension);
+        for (int i = 0; i < memoryLocks.length; i++) {
+            memoryLocks[i] = new Object();
+        }
     }
 
     public Map<String, Object> query(Query query) {
@@ -121,93 +134,159 @@ public final class MemoryDataPort {
         validateStore(command);
         boolean correction = command.memoryId() != null;
         var memoryId = correction ? requireUuid(command.memoryId()) : UUID.randomUUID().toString();
-        var graph = command.graph() == null ? new Graph(List.of(), List.of()) : command.graph();
-        var claim = mysql.beginMemoryStore(
-                command.userId(),
-                command.requestId(),
-                command.operationId(),
-                memoryId,
-                command.memoryType(),
-                command.content(),
-                command.importance(),
-                command.source().sessionId(),
-                command.source().messageId(),
-                correction ? null : command.eventTime(),
-                json(graph),
-                correction);
-        if (!claim.claimed()) {
-            return parse(claim.responseJson());
-        }
-
-        Map<String, Object> result;
-        String indexStatus;
-        try {
-            qdrant.upsert(command.userId(), memoryId, command.memoryType(), command.vector());
-            if ("semantic".equals(command.memoryType())) {
-                graphStore.replaceSemanticMemory(
-                        command.userId(), memoryId, entityMaps(graph.entities()), relationMaps(graph.relations()));
+        synchronized (memoryLock(command.userId(), memoryId)) {
+            var claim = mysql.beginMemoryStore(
+                    command.userId(),
+                    command.requestId(),
+                    command.operationId(),
+                    memoryId,
+                    command.memoryType(),
+                    command.content(),
+                    command.importance(),
+                    command.source().sessionId(),
+                    command.source().messageId(),
+                    correction ? null : command.eventTime(),
+                    json(new Graph(List.of(), List.of())),
+                    correction);
+            if (!claim.claimed()) {
+                return parse(claim.responseJson());
             }
-            result = new LinkedHashMap<>();
-            result.put("status", "ok");
-            result.put("memory_id", memoryId);
-            result.put("memory_type", command.memoryType());
-            result.put("importance", command.importance());
-            result.put("index_status", "ok");
-            result.put("message", correction ? "长期记忆已纠正。" : "长期记忆已保存。");
-            indexStatus = "ok";
-        } catch (RuntimeException exception) {
-            result = new LinkedHashMap<>();
-            result.put("status", "error");
-            result.put("memory_id", memoryId);
-            result.put("memory_type", command.memoryType());
-            result.put("index_status", "error");
-            result.put("message", "长期记忆正文已保存，但检索索引写入失败: " + exception.getMessage());
-            indexStatus = "error";
+
+            Map<String, Object> result;
+            String indexStatus;
+            try {
+                qdrant.upsert(command.userId(), memoryId, command.memoryType(), command.vector());
+                result = new LinkedHashMap<>();
+                result.put("status", "ok");
+                result.put("memory_id", memoryId);
+                result.put("memory_type", command.memoryType());
+                result.put("importance", command.importance());
+                result.put("revision", claim.revision());
+                result.put("index_status", "ok");
+                result.put("graph_status", graphStatus(command.memoryType()));
+                result.put("message", correction ? "长期记忆已纠正。" : "长期记忆已保存。");
+                indexStatus = "ok";
+            } catch (RuntimeException exception) {
+                result = new LinkedHashMap<>();
+                result.put("status", "error");
+                result.put("memory_id", memoryId);
+                result.put("memory_type", command.memoryType());
+                result.put("revision", claim.revision());
+                result.put("index_status", "error");
+                result.put("graph_status", graphStatus(command.memoryType()));
+                result.put("message", "长期记忆正文已保存，但检索索引写入失败: " + exception.getMessage());
+                indexStatus = "error";
+            }
+            mysql.completeOperation(
+                    command.userId(), command.requestId(), command.operationId(), json(result), indexStatus);
+            return result;
         }
-        mysql.completeOperation(
-                command.userId(), command.requestId(), command.operationId(), json(result), indexStatus);
-        return result;
     }
 
     public Map<String, Object> forget(ForgetCommand command) {
         validateForget(command);
         var memoryId = requireUuid(command.memoryId());
-        var claim = mysql.beginMemoryForget(
-                command.userId(),
-                command.requestId(),
-                command.operationId(),
-                memoryId,
-                command.memoryType());
-        if (!claim.claimed()) {
-            return parse(claim.responseJson());
-        }
+        synchronized (memoryLock(command.userId(), memoryId)) {
+            var claim = mysql.beginMemoryForget(
+                    command.userId(),
+                    command.requestId(),
+                    command.operationId(),
+                    memoryId,
+                    command.memoryType());
+            if (!claim.claimed()) {
+                return parse(claim.responseJson());
+            }
 
-        Map<String, Object> result;
-        String indexStatus;
-        try {
-            qdrant.delete(command.userId(), memoryId);
-            graphStore.deleteMemory(command.userId(), memoryId);
-            result = new LinkedHashMap<>();
-            result.put("status", "ok");
-            result.put("memory_id", memoryId);
-            result.put("memory_type", command.memoryType());
-            result.put("deleted", true);
-            result.put("index_status", "deleted");
-            result.put("message", "长期记忆已删除。");
-            indexStatus = "deleted";
-        } catch (RuntimeException exception) {
-            result = new LinkedHashMap<>();
-            result.put("status", "error");
-            result.put("memory_id", memoryId);
-            result.put("memory_type", command.memoryType());
-            result.put("deleted", true);
-            result.put("index_status", "error");
-            result.put("message", "长期记忆正文已删除，但索引清理失败: " + exception.getMessage());
-            indexStatus = "error";
+            Map<String, Object> result;
+            String indexStatus;
+            try {
+                qdrant.delete(command.userId(), memoryId);
+                graphStore.deleteMemory(command.userId(), memoryId);
+                result = new LinkedHashMap<>();
+                result.put("status", "ok");
+                result.put("memory_id", memoryId);
+                result.put("memory_type", command.memoryType());
+                result.put("deleted", true);
+                result.put("index_status", "deleted");
+                result.put("message", "长期记忆已删除。");
+                indexStatus = "deleted";
+            } catch (RuntimeException exception) {
+                result = new LinkedHashMap<>();
+                result.put("status", "error");
+                result.put("memory_id", memoryId);
+                result.put("memory_type", command.memoryType());
+                result.put("deleted", true);
+                result.put("index_status", "error");
+                result.put("message", "长期记忆正文已删除，但索引清理失败: " + exception.getMessage());
+                indexStatus = "error";
+            }
+            mysql.completeOperation(
+                    command.userId(), command.requestId(), command.operationId(), json(result), indexStatus);
+            return result;
         }
-        mysql.completeOperation(
-                command.userId(), command.requestId(), command.operationId(), json(result), indexStatus);
-        return result;
+    }
+
+    public Map<String, Object> claimSemanticGraph() {
+        var job = mysql.claimSemanticGraphJob();
+        if (job.isEmpty()) {
+            return Map.of("status", "not_found", "message", "没有待处理的语义记忆图谱任务。");
+        }
+        var value = job.get();
+        return Map.of(
+                "status", "ok",
+                "job", Map.of(
+                        "user_id", value.userId(),
+                        "memory_id", value.memoryId(),
+                        "content", value.content(),
+                        "revision", value.revision()));
+    }
+
+    public Map<String, Object> completeSemanticGraph(CompleteGraphCommand command) {
+        validateCompleteGraph(command);
+        var memoryId = requireUuid(command.memoryId());
+        synchronized (memoryLock(command.userId(), memoryId)) {
+            if (!mysql.isCurrentSemanticGraphJob(command.userId(), memoryId, command.revision())) {
+                return Map.of(
+                        "status", "stale",
+                        "memory_id", memoryId,
+                        "revision", command.revision(),
+                        "message", "任务对应的记忆已被纠正或删除。"
+                );
+            }
+            var graph = command.graph() == null ? new Graph(List.of(), List.of()) : command.graph();
+            if ("ok".equals(command.graphStatus())) {
+                graphStore.replaceSemanticMemory(
+                        command.userId(), memoryId,
+                        entityMaps(graph.entities()), relationMaps(graph.relations()));
+            }
+            boolean completed = mysql.completeSemanticGraphJob(
+                    command.userId(), memoryId, command.revision(), json(graph),
+                    command.graphStatus(), command.graphError());
+            if (!completed) {
+                return Map.of(
+                        "status", "stale",
+                        "memory_id", memoryId,
+                        "revision", command.revision(),
+                        "message", "任务完成时记忆版本已经变化。"
+                );
+            }
+            return Map.of(
+                    "status", "ok",
+                    "memory_id", memoryId,
+                    "revision", command.revision(),
+                    "graph_status", command.graphStatus(),
+                    "message", "语义记忆图谱任务已完成。"
+            );
+        }
+    }
+
+    public Map<String, Object> recoverSemanticGraphs() {
+        int recovered = mysql.recoverSemanticGraphJobs();
+        return Map.of(
+                "status", "ok",
+                "recovered", recovered,
+                "message", "已恢复 " + recovered + " 个中断的语义记忆图谱任务。"
+        );
     }
 
     private static Map<String, Object> memoryResult(MemoryRecord memory, double score) {
@@ -266,6 +345,21 @@ public final class MemoryDataPort {
         requireText(command.requestId(), "request_id");
         requireText(command.operationId(), "operation_id");
         requireLongTermType(command.memoryType(), false);
+    }
+
+    private static void validateCompleteGraph(CompleteGraphCommand command) {
+        requireText(command.userId(), "user_id");
+        if (command.revision() < 1) {
+            throw new IllegalArgumentException("revision 必须是正整数");
+        }
+        if (!("ok".equals(command.graphStatus())
+                || "error".equals(command.graphStatus())
+                || "skipped".equals(command.graphStatus()))) {
+            throw new IllegalArgumentException("graph_status 必须是 ok、error 或 skipped");
+        }
+        if ("error".equals(command.graphStatus())) {
+            requireText(command.graphError(), "graph_error");
+        }
     }
 
     private static void requireLongTermType(String memoryType, boolean allowAll) {
@@ -328,6 +422,15 @@ public final class MemoryDataPort {
                         "relation", relation.relation(),
                         "object", relation.object()))
                 .toList();
+    }
+
+    private Object memoryLock(String userId, String memoryId) {
+        int index = Math.floorMod(Objects.hash(userId, memoryId), memoryLocks.length);
+        return memoryLocks[index];
+    }
+
+    private static String graphStatus(String memoryType) {
+        return "semantic".equals(memoryType) ? "pending" : "skipped";
     }
 
     private String json(Object value) {

@@ -6,6 +6,10 @@ CREATE TABLE IF NOT EXISTS long_term_memory (
     importance DOUBLE NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'active',
     index_status VARCHAR(24) NOT NULL DEFAULT 'pending',
+    revision INT NOT NULL DEFAULT 1,
+    graph_status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    graph_error TEXT NULL,
+    graph_updated_at TIMESTAMP(6) NULL,
     source_session_id VARCHAR(160) NOT NULL,
     source_message_id VARCHAR(160) NOT NULL,
     event_time TIMESTAMP(6) NULL,
@@ -14,9 +18,13 @@ CREATE TABLE IF NOT EXISTS long_term_memory (
     updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     PRIMARY KEY (memory_id),
     KEY idx_memory_user_type_status (user_id, memory_type, status),
+    KEY idx_memory_graph_queue (graph_status, memory_type, status, index_status, updated_at),
     CONSTRAINT chk_memory_type CHECK (memory_type IN ('semantic', 'episodic')),
     CONSTRAINT chk_memory_importance CHECK (importance >= 0 AND importance <= 1),
-    CONSTRAINT chk_memory_status CHECK (status IN ('active', 'deleted'))
+    CONSTRAINT chk_memory_status CHECK (status IN ('active', 'deleted')),
+    CONSTRAINT chk_memory_revision CHECK (revision > 0),
+    CONSTRAINT chk_memory_graph_status
+        CHECK (graph_status IN ('pending', 'processing', 'ok', 'error', 'skipped'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS storage_operation (

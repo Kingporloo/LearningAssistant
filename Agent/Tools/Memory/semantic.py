@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -25,34 +26,17 @@ class SemanticProcessor:
         self._llm = None
         self._lock = Lock()
 
-    def prepare(
-        self,
-        content: str,
-        *,
-        source_session_id: str,
-        source_message_id: str | None,
-    ) -> dict[str, Any]:
-        graph, graph_status = self._extract(content)
-        return {
-            "content": content,
-            "graph": graph,
-            "graph_status": graph_status,
-            "source": {
-                "session_id": source_session_id,
-                "message_id": source_message_id,
-            },
-        }
-
-    def _extract(self, content: str) -> tuple[dict[str, Any], str]:
+    async def extract(self, content: str) -> tuple[dict[str, Any], str]:
         if self._extractor is not None:
-            return _valid_graph(self._extractor(content)), "ok"
+            value = await asyncio.to_thread(self._extractor, content)
+            return _valid_graph(value), "ok"
         if not os.getenv("AGENT_MODEL") or not os.getenv("AGENT_API_KEY"):
             return {"entities": [], "relations": []}, "skipped"
-        try:
-            response = self._model().invoke(EXTRACTION_PROMPT.format(content=content))
-            return _valid_graph(_parse_json(str(response.content))), "ok"
-        except Exception:
-            return {"entities": [], "relations": []}, "error"
+        response = await asyncio.to_thread(self._invoke, content)
+        return _valid_graph(_parse_json(str(response.content))), "ok"
+
+    def _invoke(self, content: str):
+        return self._model().invoke(EXTRACTION_PROMPT.format(content=content))
 
     def _model(self):
         if self._llm is None:
@@ -102,4 +86,3 @@ def _valid_graph(value: dict[str, Any]) -> dict[str, Any]:
         if subject in names and object_ in names and relation:
             relations.append({"subject": subject, "relation": relation, "object": object_})
     return {"entities": entities, "relations": relations}
-

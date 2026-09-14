@@ -18,13 +18,7 @@ record InternalRequestContext(
             Headers headers,
             JsonNode body,
             String internalToken) {
-        var expectedAuthorization = "Bearer " + internalToken;
-        var actualAuthorization = headers.getFirst("Authorization");
-        if (actualAuthorization == null || !MessageDigest.isEqual(
-                actualAuthorization.getBytes(StandardCharsets.UTF_8),
-                expectedAuthorization.getBytes(StandardCharsets.UTF_8))) {
-            throw new SecurityException("内部服务认证失败");
-        }
+        authenticateService(headers, internalToken);
 
         var userId = requiredHeader(headers, "X-User-ID");
         var sessionId = requiredHeader(headers, "X-Session-ID");
@@ -46,6 +40,16 @@ record InternalRequestContext(
                     "session_id 必须符合 session_yyyyMMdd_HHmmss_" + userId);
         }
         return new InternalRequestContext(userId, sessionId, requestId, messageId);
+    }
+
+    static void authenticateService(Headers headers, String internalToken) {
+        var expectedAuthorization = "Bearer " + internalToken;
+        var actualAuthorization = headers.getFirst("Authorization");
+        if (actualAuthorization == null || !MessageDigest.isEqual(
+                actualAuthorization.getBytes(StandardCharsets.UTF_8),
+                expectedAuthorization.getBytes(StandardCharsets.UTF_8))) {
+            throw new SecurityException("内部服务认证失败");
+        }
     }
 
     String requireMessageId() {

@@ -17,6 +17,16 @@ public final class MySqlDataStore {
     public record OperationClaim(boolean claimed, String responseJson) {
     }
 
+    public record MemoryStoreClaim(boolean claimed, String responseJson, int revision) {
+    }
+
+    public record SemanticGraphJob(
+            String userId,
+            String memoryId,
+            String content,
+            int revision) {
+    }
+
     public record RagState(int total, int ready, int building, int failed) {
     }
 
@@ -29,7 +39,7 @@ public final class MySqlDataStore {
         this.dataSource = dataSource;
     }
 
-    public OperationClaim beginMemoryStore(
+    public MemoryStoreClaim beginMemoryStore(
             String userId,
             String requestId,
             String operationId,
@@ -48,7 +58,7 @@ public final class MySqlDataStore {
                 var previous = findOperation(connection, userId, requestId, operationId, true);
                 if (previous.isPresent()) {
                     connection.commit();
-                    return new OperationClaim(false, previous.get());
+                    return new MemoryStoreClaim(false, previous.get(), 0);
                 }
                 insertOperation(connection, userId, requestId, operationId, "memory_store");
                 int changed = correction
@@ -78,22 +88,136 @@ public final class MySqlDataStore {
                             + memoryId + "\",\"message\":\"未找到当前用户可纠正的长期记忆。\"}";
                     updateOperation(connection, userId, requestId, operationId, notFound);
                     connection.commit();
-                    return new OperationClaim(false, notFound);
+                    return new MemoryStoreClaim(false, notFound, 0);
                 }
+                int revision = readMemoryRevision(connection, userId, memoryId);
                 connection.commit();
-                return new OperationClaim(true, null);
+                return new MemoryStoreClaim(true, null, revision);
             } catch (SQLException exception) {
                 rollback(connection);
                 if ("23000".equals(exception.getSQLState())) {
                     var previous = findOperation(userId, requestId, operationId);
                     if (previous.isPresent()) {
-                        return new OperationClaim(false, previous.get());
+                        return new MemoryStoreClaim(false, previous.get(), 0);
                     }
                 }
                 throw exception;
             }
         } catch (SQLException exception) {
             throw new DataPortException("MySQL 写入长期记忆失败", exception);
+        }
+    }
+
+    public Optional<SemanticGraphJob> claimSemanticGraphJob() {
+        try (var connection = dataSource.getConnection()) {
+            connection.setAutoCommit(false);
+            try (var select = connection.prepareStatement("""
+                    SELECT user_id, memory_id, content, revision
+                    FROM long_term_memory
+                    WHERE memory_type = 'semantic' AND status = 'active'
+                      AND index_status = 'ok' AND graph_status = 'pending'
+                    ORDER BY updated_at, memory_id
+                    LIMIT 1
+                    FOR UPDATE
+                    """)) {
+                try (var result = select.executeQuery()) {
+                    if (!result.next()) {
+                        connection.commit();
+                        return Optional.empty();
+                    }
+                    var job = new SemanticGraphJob(
+                            result.getString("user_id"),
+                            result.getString("memory_id"),
+                            result.getString("content"),
+                            result.getInt("revision"));
+                    try (var update = connection.prepareStatement("""
+                            UPDATE long_term_memory
+                            SET graph_status = 'processing', graph_error = NULL,
+                                graph_updated_at = CURRENT_TIMESTAMP(6),
+                                updated_at = CURRENT_TIMESTAMP(6)
+                            WHERE user_id = ? AND memory_id = ? AND revision = ?
+                              AND status = 'active' AND graph_status = 'pending'
+                            """)) {
+                        update.setString(1, job.userId());
+                        update.setString(2, job.memoryId());
+                        update.setInt(3, job.revision());
+                        if (update.executeUpdate() != 1) {
+                            rollback(connection);
+                            return Optional.empty();
+                        }
+                    }
+                    connection.commit();
+                    return Optional.of(job);
+                }
+            } catch (SQLException exception) {
+                rollback(connection);
+                throw exception;
+            }
+        } catch (SQLException exception) {
+            throw new DataPortException("MySQL 领取语义记忆图谱任务失败", exception);
+        }
+    }
+
+    public boolean isCurrentSemanticGraphJob(String userId, String memoryId, int revision) {
+        try (var connection = dataSource.getConnection();
+                var statement = connection.prepareStatement("""
+                        SELECT 1
+                        FROM long_term_memory
+                        WHERE user_id = ? AND memory_id = ? AND revision = ?
+                          AND memory_type = 'semantic' AND status = 'active'
+                          AND graph_status = 'processing'
+                        """)) {
+            statement.setString(1, userId);
+            statement.setString(2, memoryId);
+            statement.setInt(3, revision);
+            try (var result = statement.executeQuery()) {
+                return result.next();
+            }
+        } catch (SQLException exception) {
+            throw new DataPortException("MySQL 校验语义记忆图谱任务失败", exception);
+        }
+    }
+
+    public boolean completeSemanticGraphJob(
+            String userId,
+            String memoryId,
+            int revision,
+            String graphJson,
+            String graphStatus,
+            String graphError) {
+        try (var connection = dataSource.getConnection();
+                var statement = connection.prepareStatement("""
+                        UPDATE long_term_memory
+                        SET graph_json = CAST(? AS JSON), graph_status = ?, graph_error = ?,
+                            graph_updated_at = CURRENT_TIMESTAMP(6), updated_at = CURRENT_TIMESTAMP(6)
+                        WHERE user_id = ? AND memory_id = ? AND revision = ?
+                          AND memory_type = 'semantic' AND status = 'active'
+                          AND graph_status = 'processing'
+                        """)) {
+            statement.setString(1, graphJson);
+            statement.setString(2, graphStatus);
+            statement.setString(3, graphError);
+            statement.setString(4, userId);
+            statement.setString(5, memoryId);
+            statement.setInt(6, revision);
+            return statement.executeUpdate() == 1;
+        } catch (SQLException exception) {
+            throw new DataPortException("MySQL 完成语义记忆图谱任务失败", exception);
+        }
+    }
+
+    public int recoverSemanticGraphJobs() {
+        try (var connection = dataSource.getConnection();
+                var statement = connection.prepareStatement("""
+                        UPDATE long_term_memory
+                        SET graph_status = 'pending', graph_error = NULL,
+                            graph_updated_at = CURRENT_TIMESTAMP(6), updated_at = CURRENT_TIMESTAMP(6)
+                        WHERE memory_type = 'semantic' AND status = 'active'
+                          AND graph_status = 'processing'
+                        """)) {
+            return statement.executeUpdate();
+        } catch (SQLException exception) {
+            throw new DataPortException("MySQL 恢复语义记忆图谱任务失败", exception);
         }
     }
 
@@ -380,18 +504,19 @@ public final class MySqlDataStore {
         try (var statement = connection.prepareStatement("""
                 INSERT INTO long_term_memory
                     (memory_id, user_id, memory_type, content, importance, status, index_status,
-                     source_session_id, source_message_id, event_time, graph_json)
-                VALUES (?, ?, ?, ?, ?, 'active', 'pending', ?, ?, ?, CAST(? AS JSON))
+                     revision, graph_status, source_session_id, source_message_id, event_time, graph_json)
+                VALUES (?, ?, ?, ?, ?, 'active', 'pending', 1, ?, ?, ?, ?, CAST(? AS JSON))
                 """)) {
             statement.setString(1, memoryId);
             statement.setString(2, userId);
             statement.setString(3, memoryType);
             statement.setString(4, content);
             statement.setDouble(5, importance);
-            statement.setString(6, sourceSessionId);
-            statement.setString(7, sourceMessageId);
-            statement.setTimestamp(8, timestamp(eventTime));
-            statement.setString(9, graphJson);
+            statement.setString(6, "semantic".equals(memoryType) ? "pending" : "skipped");
+            statement.setString(7, sourceSessionId);
+            statement.setString(8, sourceMessageId);
+            statement.setTimestamp(9, timestamp(eventTime));
+            statement.setString(10, graphJson);
             return statement.executeUpdate();
         }
     }
@@ -410,6 +535,9 @@ public final class MySqlDataStore {
                 UPDATE long_term_memory
                 SET content = ?, importance = ?, source_session_id = ?, source_message_id = ?,
                     graph_json = CAST(? AS JSON), status = 'active', index_status = 'pending',
+                    revision = revision + 1,
+                    graph_status = CASE WHEN memory_type = 'semantic' THEN 'pending' ELSE 'skipped' END,
+                    graph_error = NULL, graph_updated_at = NULL,
                     updated_at = CURRENT_TIMESTAMP(6)
                 WHERE user_id = ? AND memory_id = ? AND memory_type = ? AND status = 'active'
                 """)) {
@@ -422,6 +550,22 @@ public final class MySqlDataStore {
             statement.setString(7, memoryId);
             statement.setString(8, memoryType);
             return statement.executeUpdate();
+        }
+    }
+
+    private int readMemoryRevision(Connection connection, String userId, String memoryId)
+            throws SQLException {
+        try (var statement = connection.prepareStatement("""
+                SELECT revision FROM long_term_memory WHERE user_id = ? AND memory_id = ?
+                """)) {
+            statement.setString(1, userId);
+            statement.setString(2, memoryId);
+            try (var result = statement.executeQuery()) {
+                if (!result.next()) {
+                    throw new SQLException("长期记忆版本不存在");
+                }
+                return result.getInt("revision");
+            }
         }
     }
 

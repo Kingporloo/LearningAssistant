@@ -85,6 +85,14 @@ class InternalRequestContextTest {
     }
 
     @Test
+    void serviceAuthenticationOnlyRequiresInternalToken() {
+        var headers = new Headers();
+        headers.set("Authorization", "Bearer internal-token");
+
+        InternalRequestContext.authenticateService(headers, "internal-token");
+    }
+
+    @Test
     void rejectsBodyIdentityThatDoesNotMatchHeaders() throws Exception {
         var body = mapper.readTree(validBody());
         ((com.fasterxml.jackson.databind.node.ObjectNode) body).put("user_id", "another-user");

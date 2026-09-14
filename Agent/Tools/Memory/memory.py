@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
 from typing import Any, Literal
 from uuid import uuid4
 
 from Agent.Tools.Memory.episodic import prepare_episodic_memory
-from Agent.Tools.Memory.semantic import SemanticProcessor
 from Agent.Tools.Memory.working import WorkingMemory
 from Agent.Tools.RAG.dataPraperation import EmbeddingModel
 from Agent.Interface.BackendClient import (
@@ -29,13 +30,13 @@ class MemoryService:
         backend: BackendClient | None = None,
         *,
         embeddings: EmbeddingModel | None = None,
-        semantic: SemanticProcessor | None = None,
         working: WorkingMemory | None = None,
+        graph_job_notifier: Callable[[], None] | None = None,
     ) -> None:
         self.backend = backend or BackendClient.from_env()
         self.embeddings = embeddings or EmbeddingModel()
-        self.semantic = semantic or SemanticProcessor()
         self.working = working or WorkingMemory()
+        self.graph_job_notifier = graph_job_notifier
 
     async def query(
         self,
@@ -55,7 +56,7 @@ class MemoryService:
             return _error("limit 必须在 1 到 20 之间。")
 
         working_results = self._working_results(context, query, limit) if memory_type == "all" else []
-        vector = self.embeddings.embed_query(query)
+        vector = await asyncio.to_thread(self.embeddings.embed_query, query)
         try:
             response = await self.backend.memory_query(
                 context,
@@ -111,11 +112,13 @@ class MemoryService:
             return _error("缺少来源 message_id，不能写入长期记忆。")
 
         if memory_type == "semantic":
-            data = self.semantic.prepare(
-                content,
-                source_session_id=context.session_id,
-                source_message_id=context.message_id,
-            )
+            data = {
+                "content": content,
+                "source": {
+                    "session_id": context.session_id,
+                    "message_id": context.message_id,
+                },
+            }
         else:
             data = prepare_episodic_memory(
                 content,
@@ -127,7 +130,7 @@ class MemoryService:
             "memory_type": memory_type,
             "memory_id": memory_id,
             "importance": importance,
-            "vector": self.embeddings.embed_query(content),
+            "vector": await asyncio.to_thread(self.embeddings.embed_query, content),
         })
         try:
             response = await self.backend.memory_store(
@@ -139,7 +142,14 @@ class MemoryService:
             return {"status": "unknown", "memory_id": memory_id, "message": str(exc)}
         except BackendError as exc:
             return _error(str(exc))
-        return _normalise(response, default_message="长期记忆已保存。")
+        result = _normalise(response, default_message="长期记忆已保存。")
+        if (
+            memory_type == "semantic"
+            and result["status"] == "ok"
+            and self.graph_job_notifier is not None
+        ):
+            self.graph_job_notifier()
+        return result
 
     async def forget(
         self,

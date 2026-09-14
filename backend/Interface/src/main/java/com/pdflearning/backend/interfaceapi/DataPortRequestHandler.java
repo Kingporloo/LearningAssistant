@@ -20,6 +20,12 @@ final class DataPortRequestHandler {
         CONTEXT_SUMMARY_STORE
     }
 
+    enum WorkerOperation {
+        MEMORY_GRAPH_CLAIM,
+        MEMORY_GRAPH_COMPLETE,
+        MEMORY_GRAPH_RECOVER
+    }
+
     private final ContextSummaryDataPort summaries;
     private final MemoryDataPort memory;
     private final RagDataPort rag;
@@ -50,6 +56,17 @@ final class DataPortRequestHandler {
             case MEMORY_STORE -> memory.store(memoryStore(context, body));
             case MEMORY_FORGET -> memory.forget(memoryForget(context, body));
             case CONTEXT_SUMMARY_STORE -> summaries.store(contextSummary(context, body));
+        };
+    }
+
+    Map<String, Object> handleWorker(WorkerOperation operation, JsonNode body) {
+        if (!body.isObject()) {
+            throw new IllegalArgumentException("请求正文必须是 JSON 对象");
+        }
+        return switch (operation) {
+            case MEMORY_GRAPH_CLAIM -> memory.claimSemanticGraph();
+            case MEMORY_GRAPH_COMPLETE -> memory.completeSemanticGraph(memoryGraphComplete(body));
+            case MEMORY_GRAPH_RECOVER -> memory.recoverSemanticGraphs();
         };
     }
 
@@ -100,7 +117,16 @@ final class DataPortRequestHandler {
                 number(body, "importance"),
                 vector(body, "vector"),
                 new MemoryDataPort.Source(context.sessionId(), messageId),
-                optionalTime(body, "event_time"),
+                optionalTime(body, "event_time"));
+    }
+
+    static MemoryDataPort.CompleteGraphCommand memoryGraphComplete(JsonNode body) {
+        return new MemoryDataPort.CompleteGraphCommand(
+                requiredText(body, "user_id"),
+                requiredText(body, "memory_id"),
+                positiveInteger(body, "revision"),
+                requiredText(body, "graph_status"),
+                optionalText(body, "graph_error"),
                 graph(body.get("graph")));
     }
 
@@ -226,6 +252,14 @@ final class DataPortRequestHandler {
         int value = integer(body, name);
         if (value < 0) {
             throw new IllegalArgumentException(name + " 不能小于 0");
+        }
+        return value;
+    }
+
+    private static int positiveInteger(JsonNode body, String name) {
+        int value = integer(body, name);
+        if (value < 1) {
+            throw new IllegalArgumentException(name + " 必须是正整数");
         }
         return value;
     }

@@ -45,6 +45,15 @@ public final class AgentStorageServer implements AutoCloseable {
         register("/internal/storage/memory/query", DataPortRequestHandler.Operation.MEMORY_QUERY);
         register("/internal/storage/memory/store", DataPortRequestHandler.Operation.MEMORY_STORE);
         register("/internal/storage/memory/forget", DataPortRequestHandler.Operation.MEMORY_FORGET);
+        registerWorker(
+                "/internal/storage/memory/graph/claim",
+                DataPortRequestHandler.WorkerOperation.MEMORY_GRAPH_CLAIM);
+        registerWorker(
+                "/internal/storage/memory/graph/complete",
+                DataPortRequestHandler.WorkerOperation.MEMORY_GRAPH_COMPLETE);
+        registerWorker(
+                "/internal/storage/memory/graph/recover",
+                DataPortRequestHandler.WorkerOperation.MEMORY_GRAPH_RECOVER);
         register(
                 "/internal/storage/context/summary",
                 DataPortRequestHandler.Operation.CONTEXT_SUMMARY_STORE);
@@ -93,6 +102,10 @@ public final class AgentStorageServer implements AutoCloseable {
         server.createContext(path, exchange -> handle(exchange, path, operation));
     }
 
+    private void registerWorker(String path, DataPortRequestHandler.WorkerOperation operation) {
+        server.createContext(path, exchange -> handleWorker(exchange, path, operation));
+    }
+
     private void handle(
             HttpExchange exchange,
             String expectedPath,
@@ -111,6 +124,38 @@ public final class AgentStorageServer implements AutoCloseable {
             var context = InternalRequestContext.authenticate(
                     exchange.getRequestHeaders(), body, internalToken);
             send(exchange, 200, requestHandler.handle(operation, context, body));
+        } catch (SecurityException exception) {
+            safeSend(exchange, 401, error(exception.getMessage()));
+        } catch (JsonProcessingException | IllegalArgumentException exception) {
+            safeSend(exchange, 400, error(exception.getMessage()));
+        } catch (DataPortException exception) {
+            safeSend(exchange, 503, error(exception.getMessage()));
+        } catch (IOException exception) {
+            safeSend(exchange, 400, error("无法读取请求正文"));
+        } catch (RuntimeException exception) {
+            safeSend(exchange, 500, error("数据接口处理失败"));
+        } finally {
+            exchange.close();
+        }
+    }
+
+    private void handleWorker(
+            HttpExchange exchange,
+            String expectedPath,
+            DataPortRequestHandler.WorkerOperation operation) {
+        try {
+            if (!expectedPath.equals(exchange.getRequestURI().getPath())) {
+                send(exchange, 404, error("接口不存在"));
+                return;
+            }
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                exchange.getResponseHeaders().set("Allow", "POST");
+                send(exchange, 405, error("只允许 POST 请求"));
+                return;
+            }
+            var body = readBody(exchange);
+            InternalRequestContext.authenticateService(exchange.getRequestHeaders(), internalToken);
+            send(exchange, 200, requestHandler.handleWorker(operation, body));
         } catch (SecurityException exception) {
             safeSend(exchange, 401, error(exception.getMessage()));
         } catch (JsonProcessingException | IllegalArgumentException exception) {

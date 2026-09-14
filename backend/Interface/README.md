@@ -54,6 +54,9 @@
 | `POST /internal/storage/memory/query` | 用户级长期记忆查询 |
 | `POST /internal/storage/memory/store` | 长期记忆新增或纠正 |
 | `POST /internal/storage/memory/forget` | 长期记忆删除 |
+| `POST /internal/storage/memory/graph/claim` | 领取一个待补全的语义图谱任务 |
+| `POST /internal/storage/memory/graph/complete` | 按记忆版本保存图谱任务结果 |
+| `POST /internal/storage/memory/graph/recover` | 服务启动时恢复中断任务 |
 | `POST /internal/storage/context/summary` | 会话摘要的版本化、幂等保存 |
 
 请求格式与 Python `Agent/Interface/BackendClient.py` 保持一致。每个请求必须同时
@@ -71,6 +74,10 @@ Interface 接受 Java User 服务分配的安全 `user_id`，也保留 `dev_user
 Memory store 中的 `source.session_id` 与
 `source.message_id` 必须等于可信请求上下文，Interface 使用可信值构造 DataPort
 命令。模型不能通过业务参数切换用户或伪造来源。
+
+三个 `memory/graph/*` 接口只由 Memory 服务的后台工作进程使用，只要求内部服务
+token。任务的 `user_id`、`memory_id` 和 `revision` 来自 Java 返回的持久任务；
+完成时 Java 再检查记录仍属于同一用户、仍有效且版本未变化。
 
 ## 启动内部数据接口
 

@@ -106,12 +106,16 @@ collection 并修改上述 collection 名称；旧向量不能直接复用，需
 | `/internal/storage/memory/query` | `memory().query(query)` |
 | `/internal/storage/memory/store` | `memory().store(storeCommand)` |
 | `/internal/storage/memory/forget` | `memory().forget(forgetCommand)` |
+| `/internal/storage/memory/graph/claim` | `memory().claimSemanticGraph()` |
+| `/internal/storage/memory/graph/complete` | `memory().completeSemanticGraph(command)` |
+| `/internal/storage/memory/graph/recover` | `memory().recoverSemanticGraphs()` |
 | `/internal/storage/context/summary` | `contextSummaries().store(storeCommand)` |
 
 Java 调用 Python Agent 时，`backend/Interface` 使用 `agentRuns()` 先登记运行，再逐条
 保存 SSE 事件。该端口不负责网络调用或前端转发。
 
 Memory 请求中的 `scope` 只允许为 `user`；Working Memory 由 Python 处理，不映射到
-DataPort。`graph_status` 为 Python 图提炼状态，不作为数据库路由条件；只有实际的
-`graph` 内容会进入 `StoreCommand`。Controller 不接受客户端提供的 SQL、Cypher
-或用户过滤表达式。
+DataPort。长期记忆正文与向量完成后即可返回，语义实体关系由 Python 工作进程通过
+claim / complete 接口异步补全。MySQL 的 `revision` 和 `graph_status` 是持久任务状态；
+纠正会递增版本，删除或新版本会使旧任务结果失效。Controller 不接受客户端提供的
+SQL、Cypher 或用户过滤表达式。
