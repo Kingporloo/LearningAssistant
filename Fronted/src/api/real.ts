@@ -1,6 +1,6 @@
 /**
- * 真实服务客户端。联调时在 .env 设 VITE_USE_MOCK=false，UserServer 与 Agent
- * 网关可分别通过 VITE_USER_API_BASE_URL、VITE_API_BASE_URL 配置。
+ * 真实服务客户端。联调时在 .env 设 VITE_USE_MOCK=false，并通过
+ * VITE_API_BASE_URL 配置 Java 统一网关。
  *
  * 约定（对齐后端设计）：
  * - 认证：Authorization: Bearer <token>
@@ -26,16 +26,14 @@ import type {
 } from './client'
 import { ApiRequestError, getToken } from './client'
 
-const AGENT_BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? '/api'
-const USER_BASE_URL: string = import.meta.env.VITE_USER_API_BASE_URL ?? AGENT_BASE_URL
+const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
 async function request<T>(
   path: string,
   init?: RequestInit,
-  baseUrl: string = AGENT_BASE_URL,
 ): Promise<T> {
   const token = getToken()
-  const response = await fetch(`${baseUrl}${path}`, {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
@@ -53,6 +51,7 @@ async function request<T>(
     }
     throw new ApiRequestError(response.status, message)
   }
+  if (response.status === 204) return undefined as T
   return (await response.json()) as T
 }
 
@@ -110,55 +109,39 @@ async function consumeSse(
 export function createRealApiClient(): ApiClient {
   return {
     async register(req: RegisterRequest): Promise<AuthResult> {
-      return request(
-        '/auth/register',
-        {
-          method: 'POST',
-          body: JSON.stringify(req),
-        },
-        USER_BASE_URL,
-      )
+      return request('/auth/register', {
+        method: 'POST',
+        body: JSON.stringify(req),
+      })
     },
 
     async login(req: LoginRequest): Promise<AuthResult> {
-      return request(
-        '/auth/login',
-        {
-          method: 'POST',
-          body: JSON.stringify(req),
-        },
-        USER_BASE_URL,
-      )
+      return request('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify(req),
+      })
     },
 
     async logout(): Promise<void> {
-      await request('/auth/logout', { method: 'POST' }, USER_BASE_URL)
+      await request('/auth/logout', { method: 'POST' })
     },
 
     async me(): Promise<User> {
-      return request('/auth/me', undefined, USER_BASE_URL)
+      return request('/auth/me')
     },
 
     async updateProfile(req: UpdateProfileRequest): Promise<User> {
-      return request(
-        '/users/me',
-        {
-          method: 'PATCH',
-          body: JSON.stringify(req),
-        },
-        USER_BASE_URL,
-      )
+      return request('/users/me', {
+        method: 'PATCH',
+        body: JSON.stringify(req),
+      })
     },
 
     async changePassword(req: ChangePasswordRequest): Promise<void> {
-      await request(
-        '/users/me/password',
-        {
-          method: 'POST',
-          body: JSON.stringify(req),
-        },
-        USER_BASE_URL,
-      )
+      await request('/users/me/password', {
+        method: 'POST',
+        body: JSON.stringify(req),
+      })
     },
 
     async listSessions(): Promise<SessionInfo[]> {
@@ -191,7 +174,7 @@ export function createRealApiClient(): ApiClient {
         try {
           const token = getToken()
           const response = await fetch(
-            `${AGENT_BASE_URL}/sessions/${sessionId}/runs`,
+            `${API_BASE_URL}/sessions/${sessionId}/runs`,
             {
               method: 'POST',
               headers: {
@@ -247,12 +230,14 @@ export function createRealApiClient(): ApiClient {
 
     async uploadDocument(file: File): Promise<DocumentItem> {
       const token = getToken()
-      const form = new FormData()
-      form.append('file', file)
-      const response = await fetch(`${AGENT_BASE_URL}/documents`, {
+      const fileName = encodeURIComponent(file.name)
+      const response = await fetch(`${API_BASE_URL}/documents?filename=${fileName}`, {
         method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: form,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: file,
       })
       if (!response.ok) {
         let message = `上传失败（${response.status}）`

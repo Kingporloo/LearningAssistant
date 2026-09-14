@@ -26,7 +26,10 @@ public final class AgentControlClient {
         this(
                 baseUri,
                 internalToken,
-                HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(),
+                HttpClient.newBuilder()
+                        .version(HttpClient.Version.HTTP_1_1)
+                        .connectTimeout(Duration.ofSeconds(10))
+                        .build(),
                 new ObjectMapper());
     }
 

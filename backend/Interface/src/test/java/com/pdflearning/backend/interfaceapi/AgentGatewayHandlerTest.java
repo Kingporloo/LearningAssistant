@@ -8,6 +8,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pdflearning.backend.dataport.AgentRunDataPort;
 import com.pdflearning.backend.dataport.ChatDataPort;
 import com.pdflearning.backend.dataport.ContextSummaryDataPort;
+import com.pdflearning.backend.dataport.DocumentDataPort;
+import com.pdflearning.backend.dataport.RagDataPort;
+import com.pdflearning.backend.dataport.RagDocumentStore;
 import com.pdflearning.backend.dataport.UserDataPort;
 import com.pdflearning.backend.user.UserService;
 import com.sun.net.httpserver.HttpServer;
@@ -17,7 +20,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -129,6 +134,88 @@ class AgentGatewayHandlerTest {
         }
     }
 
+    @Test
+    void exposesUserAndAgentRoutesThroughOneGateway() throws Exception {
+        var source = database();
+        var users = new UserService(new UserDataPort(source), Duration.ofHours(1));
+        var python = pythonServer(
+                new AtomicReference<>(), new AtomicReference<>(), new AtomicInteger());
+        var gateway = gatewayServer(source, users, python);
+        python.start();
+        gateway.start();
+        try {
+            URI base = URI.create("http://127.0.0.1:" + gateway.getAddress().getPort());
+            var register = send(
+                    base.resolve("/auth/register"),
+                    "POST",
+                    null,
+                    """
+                    {"username":"gateway_user","password":"secret123","nickname":"网关用户"}
+                    """);
+            assertEquals(200, register.statusCode());
+            var auth = mapper.readTree(register.body());
+            String token = auth.path("token").asText();
+            assertEquals("gateway_user", auth.path("user").path("username").asText());
+
+            var me = send(base.resolve("/auth/me"), "GET", token, null);
+            assertEquals(200, me.statusCode());
+            assertEquals("网关用户", mapper.readTree(me.body()).path("nickname").asText());
+
+            var sessions = send(base.resolve("/sessions"), "GET", token, null);
+            assertEquals(200, sessions.statusCode());
+            assertTrue(mapper.readTree(sessions.body()).isArray());
+
+            var anonymous = send(base.resolve("/sessions"), "GET", null, null);
+            assertEquals(401, anonymous.statusCode());
+        } finally {
+            gateway.stop(0);
+            python.stop(0);
+        }
+    }
+
+    @Test
+    void managesRagDocumentsThroughAuthenticatedGateway() throws Exception {
+        var source = database();
+        var users = new UserService(new UserDataPort(source), Duration.ofHours(1));
+        var first = users.register("document_owner", "secret1", "文档用户");
+        var second = users.register("another_owner", "secret2", "另一用户");
+        var python = pythonServer(
+                new AtomicReference<>(), new AtomicReference<>(), new AtomicInteger());
+        var gateway = gatewayServer(source, users, python);
+        python.start();
+        gateway.start();
+        try {
+            URI base = URI.create("http://127.0.0.1:" + gateway.getAddress().getPort());
+            var upload = upload(
+                    base.resolve("/documents?filename=%E6%95%99%E6%9D%90.txt"),
+                    first.token(),
+                    "注意力机制会为不同信息分配不同权重。".getBytes(StandardCharsets.UTF_8));
+            assertEquals(202, upload.statusCode());
+            String documentId = mapper.readTree(upload.body()).path("id").asText();
+
+            JsonNode ready = waitForReady(base, first.token(), documentId);
+            assertEquals("教材.txt", ready.path("name").asText());
+            assertEquals("ready", ready.path("status").asText());
+            assertEquals(1, ready.path("chunkCount").asInt());
+            assertEquals(3, ready.path("pageCount").asInt());
+
+            var isolated = send(base.resolve("/documents"), "GET", second.token(), null);
+            assertEquals(0, mapper.readTree(isolated.body()).size());
+            var forbiddenDelete = send(
+                    base.resolve("/documents/" + documentId), "DELETE", second.token(), null);
+            assertEquals(404, forbiddenDelete.statusCode());
+
+            var deleted = send(
+                    base.resolve("/documents/" + documentId), "DELETE", first.token(), null);
+            assertEquals(204, deleted.statusCode());
+            var afterDelete = send(base.resolve("/documents"), "GET", first.token(), null);
+            assertEquals(0, mapper.readTree(afterDelete.body()).size());
+        } finally {
+            gateway.stop(0);
+            python.stop(0);
+        }
+    }
+
     private HttpServer gatewayServer(
             JdbcDataSource source,
             UserService users,
@@ -136,11 +223,19 @@ class AgentGatewayHandlerTest {
         var chats = new ChatDataPort(source);
         var runs = new AgentRunDataPort(source);
         var summaries = new ContextSummaryDataPort(source);
+        var documents = new DocumentDataPort(source);
         URI pythonBase = URI.create("http://127.0.0.1:" + python.getAddress().getPort());
+        var executor = Executors.newVirtualThreadPerTaskExecutor();
         var handler = new AgentGatewayHandler(
                 users,
                 chats,
                 summaries,
+                documents,
+                new TestRagDocumentStore(source),
+                new RagBuildClient(pythonBase, "internal-token", Duration.ofSeconds(2), mapper),
+                Path.of(System.getProperty("java.io.tmpdir"),
+                        "pdf-learning-gateway-test-" + System.nanoTime()),
+                executor,
                 new AgentControlClient(pythonBase, "internal-token"),
                 new AgentRunService(new AgentSseClient(pythonBase, "internal-token"), runs),
                 new AgentRunRequest.AgentConfig(10_000, 8_000, 1_000, 1_000),
@@ -148,7 +243,7 @@ class AgentGatewayHandlerTest {
                 mapper);
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", handler::handle);
-        server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+        server.setExecutor(executor);
         return server;
     }
 
@@ -246,6 +341,35 @@ class AgentGatewayHandlerTest {
                 output.write(response);
             }
         });
+        server.createContext("/internal/rag/build", exchange -> {
+            var request = mapper.readTree(exchange.getRequestBody());
+            var chunk = mapper.createObjectNode();
+            chunk.put("chunk_id", request.path("document_id").asText() + ":0");
+            chunk.put("document_id", request.path("document_id").asText());
+            chunk.put("chunk_index", 0);
+            chunk.put("text", "注意力机制会为不同信息分配不同权重。");
+            chunk.put("source", request.path("source_name").asText());
+            chunk.put("file_type", ".txt");
+            chunk.put("page", 3);
+            chunk.set("vector", mapper.createArrayNode().add(0.1).add(0.2));
+            var graph = mapper.createObjectNode();
+            graph.set("next_chunk", mapper.createArrayNode());
+            graph.set("similar_to", mapper.createArrayNode());
+            var result = mapper.createObjectNode();
+            result.put("user_id", request.path("user_id").asText());
+            result.put("document_id", request.path("document_id").asText());
+            result.put("request_id", request.path("request_id").asText());
+            result.put("status", "ok");
+            result.put("message", "构建完成");
+            result.set("chunks", mapper.createArrayNode().add(chunk));
+            result.set("graph", graph);
+            byte[] response = result.toString().getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            try (var output = exchange.getResponseBody()) {
+                output.write(response);
+            }
+        });
         return server;
     }
 
@@ -269,15 +393,40 @@ class AgentGatewayHandlerTest {
             String method,
             String token,
             String body) throws Exception {
+        var builder = HttpRequest.newBuilder(uri).header("Content-Type", "application/json");
+        if (token != null) {
+            builder.header("Authorization", "Bearer " + token);
+        }
+        var request = builder.method(method, body == null
+                ? HttpRequest.BodyPublishers.noBody()
+                : HttpRequest.BodyPublishers.ofString(body)).build();
+        return HttpClient.newHttpClient().send(
+                request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> upload(URI uri, String token, byte[] body) throws Exception {
         var request = HttpRequest.newBuilder(uri)
                 .header("Authorization", "Bearer " + token)
-                .header("Content-Type", "application/json")
-                .method(method, body == null
-                        ? HttpRequest.BodyPublishers.noBody()
-                        : HttpRequest.BodyPublishers.ofString(body))
+                .header("Content-Type", "application/octet-stream")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .build();
         return HttpClient.newHttpClient().send(
                 request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private JsonNode waitForReady(URI base, String token, String documentId) throws Exception {
+        for (int attempt = 0; attempt < 100; attempt++) {
+            var response = send(base.resolve("/documents"), "GET", token, null);
+            assertEquals(200, response.statusCode());
+            for (var document : mapper.readTree(response.body())) {
+                if (documentId.equals(document.path("id").asText())
+                        && "ready".equals(document.path("status").asText())) {
+                    return document;
+                }
+            }
+            Thread.sleep(10);
+        }
+        throw new AssertionError("文档未在测试时限内完成构建");
     }
 
     private JdbcDataSource database() throws Exception {
@@ -374,7 +523,78 @@ class AgentGatewayHandlerTest {
                         source_refs_json CLOB NOT NULL,
                         PRIMARY KEY (user_id, session_id))
                     """);
+            statement.execute("""
+                    CREATE TABLE rag_document (
+                        user_id VARCHAR(128) NOT NULL,
+                        document_id VARCHAR(160) NOT NULL,
+                        file_name VARCHAR(255),
+                        file_size BIGINT,
+                        source_path VARCHAR(1024),
+                        markdown_path VARCHAR(1024),
+                        build_request_id VARCHAR(160) NOT NULL,
+                        status VARCHAR(16) NOT NULL,
+                        status_message CLOB,
+                        chunk_count INT,
+                        page_count INT,
+                        ready_at TIMESTAMP(6),
+                        created_at TIMESTAMP(6) NOT NULL,
+                        updated_at TIMESTAMP(6) NOT NULL,
+                        PRIMARY KEY (user_id, document_id))
+                    """);
         }
         return source;
+    }
+
+    private static final class TestRagDocumentStore implements RagDocumentStore {
+        private final JdbcDataSource source;
+
+        private TestRagDocumentStore(JdbcDataSource source) {
+            this.source = source;
+        }
+
+        @Override
+        public Map<String, Object> replaceDocument(RagDataPort.BuildCommand command) {
+            int updated = updateStatus(
+                    command.userId(), command.documentId(), command.requestId(),
+                    command.chunks().isEmpty() ? "empty" : "ready");
+            return updated == 0
+                    ? Map.of("status", "cancelled")
+                    : Map.of("status", command.chunks().isEmpty() ? "empty" : "ready");
+        }
+
+        @Override
+        public Map<String, Object> deleteDocument(String userId, String documentId) {
+            try (var connection = source.getConnection();
+                    var statement = connection.prepareStatement("""
+                            UPDATE rag_document SET status = 'deleted'
+                            WHERE user_id = ? AND document_id = ? AND status <> 'deleted'
+                            """)) {
+                statement.setString(1, userId);
+                statement.setString(2, documentId);
+                return statement.executeUpdate() == 0
+                        ? Map.of("status", "not_found")
+                        : Map.of("status", "deleted");
+            } catch (java.sql.SQLException exception) {
+                throw new RuntimeException(exception);
+            }
+        }
+
+        private int updateStatus(
+                String userId, String documentId, String requestId, String status) {
+            try (var connection = source.getConnection();
+                    var statement = connection.prepareStatement("""
+                            UPDATE rag_document SET status = ?, updated_at = CURRENT_TIMESTAMP
+                            WHERE user_id = ? AND document_id = ? AND build_request_id = ?
+                              AND status <> 'deleted'
+                            """)) {
+                statement.setString(1, status);
+                statement.setString(2, userId);
+                statement.setString(3, documentId);
+                statement.setString(4, requestId);
+                return statement.executeUpdate();
+            } catch (java.sql.SQLException exception) {
+                throw new RuntimeException(exception);
+            }
+        }
     }
 }

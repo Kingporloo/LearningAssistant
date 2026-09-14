@@ -9,7 +9,12 @@ from typing import Any
 from urllib.parse import urlparse
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    convert_to_openai_messages,
+)
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_openai import ChatOpenAI
 
@@ -96,7 +101,16 @@ class Assistant:
         if request.mode == "react":
             return self.model.get_num_tokens(request.prompt or "")
 
-        message_tokens = self.model.get_num_tokens_from_messages(request.messages)
+        try:
+            message_tokens = self.model.get_num_tokens_from_messages(request.messages)
+        except NotImplementedError:
+            message_text = json.dumps(
+                convert_to_openai_messages(request.messages),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            )
+            message_tokens = self.model.get_num_tokens(message_text)
         if not request.tools:
             return message_tokens
         schemas = [convert_to_openai_tool(tool) for tool in request.tools]

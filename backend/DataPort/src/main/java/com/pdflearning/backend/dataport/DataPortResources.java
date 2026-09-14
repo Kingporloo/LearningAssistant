@@ -10,6 +10,10 @@ import org.neo4j.driver.GraphDatabase;
 public final class DataPortResources implements AutoCloseable {
     private final HikariDataSource dataSource;
     private final Neo4jGraphStore graphStore;
+    private final UserDataPort users;
+    private final ChatDataPort chats;
+    private final AgentRunDataPort agentRuns;
+    private final DocumentDataPort documents;
     private final ContextSummaryDataPort contextSummaries;
     private final MemoryDataPort memory;
     private final RagDataPort rag;
@@ -17,11 +21,19 @@ public final class DataPortResources implements AutoCloseable {
     private DataPortResources(
             HikariDataSource dataSource,
             Neo4jGraphStore graphStore,
+            UserDataPort users,
+            ChatDataPort chats,
+            AgentRunDataPort agentRuns,
+            DocumentDataPort documents,
             ContextSummaryDataPort contextSummaries,
             MemoryDataPort memory,
             RagDataPort rag) {
         this.dataSource = dataSource;
         this.graphStore = graphStore;
+        this.users = users;
+        this.chats = chats;
+        this.agentRuns = agentRuns;
+        this.documents = documents;
         this.contextSummaries = contextSummaries;
         this.memory = memory;
         this.rag = rag;
@@ -31,7 +43,7 @@ public final class DataPortResources implements AutoCloseable {
         return from(System.getenv());
     }
 
-    static DataPortResources from(Map<String, String> environment) {
+    public static DataPortResources from(Map<String, String> environment) {
         var mysqlUrl = required(environment, "MYSQL_JDBC_URL");
         var mysqlUser = required(environment, "MYSQL_USER");
         var mysqlPassword = required(environment, "MYSQL_PASSWORD");
@@ -73,6 +85,10 @@ public final class DataPortResources implements AutoCloseable {
             return new DataPortResources(
                     dataSource,
                     graph,
+                    new UserDataPort(dataSource),
+                    new ChatDataPort(dataSource),
+                    new AgentRunDataPort(dataSource),
+                    new DocumentDataPort(dataSource),
                     new ContextSummaryDataPort(dataSource),
                     new MemoryDataPort(mysql, qdrant, graph, vectorDimension),
                     new RagDataPort(mysql, milvus, graph, vectorDimension));
@@ -84,6 +100,22 @@ public final class DataPortResources implements AutoCloseable {
 
     public MemoryDataPort memory() {
         return memory;
+    }
+
+    public UserDataPort users() {
+        return users;
+    }
+
+    public ChatDataPort chats() {
+        return chats;
+    }
+
+    public AgentRunDataPort agentRuns() {
+        return agentRuns;
+    }
+
+    public DocumentDataPort documents() {
+        return documents;
     }
 
     public ContextSummaryDataPort contextSummaries() {

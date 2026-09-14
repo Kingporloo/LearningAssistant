@@ -1,23 +1,33 @@
 # Agent 通信接口
 
-该模块处理 Java 与 Python Agent 之间的两个通信方向，并提供面向前端的 Agent
+该模块处理 Java 与 Python Agent 之间的两个通信方向，并提供面向前端的统一
 入口。数据库操作仍全部委托给 `backend/DataPort`，登录令牌由 `backend/User` 的
 `UserService` 校验。`AgentSseClient` 只处理 Python 网络协议，`AgentRunService`
 负责运行幂等与原始事件持久化，`AgentGatewayServer` 负责会话归属、聊天历史和
 前端 SSE 转发。
 
-## 前端调用 Java Agent 网关
+## 前端调用 Java 统一网关
 
-所有接口都要求 `Authorization: Bearer <用户登录令牌>`：
+浏览器只需配置一个网关地址。注册和登录是公开接口，其余接口要求
+`Authorization: Bearer <用户登录令牌>`：
 
 | 方法与路径 | 用途 |
 |---|---|
+| `POST /auth/register` | 注册并返回登录令牌 |
+| `POST /auth/login` | 登录并返回登录令牌 |
+| `POST /auth/logout` | 注销当前令牌 |
+| `GET /auth/me` | 读取当前用户 |
+| `PATCH /users/me` | 修改昵称 |
+| `POST /users/me/password` | 修改密码并撤销已有令牌 |
 | `GET /sessions` | 读取当前用户的会话 |
 | `POST /sessions` | 调用 Python 生成会话 ID；空会话仅登记在 Java 内存 |
 | `DELETE /sessions/{session_id}` | 删除空会话或将已持久化会话标记为已删除 |
 | `GET /sessions/{session_id}/messages` | 读取当前用户的可见问答与工具时间线 |
 | `POST /sessions/{session_id}/runs` | 提交消息并转发 Python SSE |
 | `POST /sessions/{session_id}/compact` | 使用 Java 组装的可信历史执行手动 Compact |
+| `GET /documents` | 读取当前用户上传的知识库文档及构建状态 |
+| `POST /documents?filename=教材.pdf` | 上传原始文件并异步启动转换和 RAG 构建；正文为原始文件字节 |
+| `DELETE /documents/{document_id}` | 删除当前用户的文档、索引和受控文件 |
 
 运行请求正文固定为：
 
@@ -29,7 +39,8 @@
 }
 ```
 
-网关不接受正文中的 `user_id`。它从登录令牌取得用户身份，逐次检查会话归属，再把
+用户路由直接复用 `backend/User` 的 `UserRequestHandler`，网关不复制注册、登录和
+密码逻辑。Agent 路由不接受正文中的 `user_id`。它从登录令牌取得用户身份，逐次检查会话归属，再把
 可信身份、近期问答和当前有效摘要组装为 `AgentRunRequest`。首条用户消息、正式会话
 归属和 Agent 运行会话在同一 MySQL 事务中创建；尚无消息的会话不会产生数据库记录。
 `chat_session.session_id` 是全局主键，不能被另一用户重新绑定。
@@ -83,17 +94,22 @@ Python 侧将 `JAVA_STORAGE_BASE_URL` 设置为 `http://127.0.0.1:8080`。服务
 监听本机地址；对外部署时由 Java 网关或反向代理处理外部访问，不能直接暴露这些
 内部存储接口。
 
-## 启动 Agent 网关
+## 启动前端统一网关
 
-Agent 网关还需要 User、Python Agent 和上下文预算配置：
+Agent 网关还需要 User、Python Agent、Python RAG 构建接口和上下文预算配置：
 
 ```text
 AGENT_GATEWAY_HOST=127.0.0.1
 AGENT_GATEWAY_PORT=8082
 AGENT_GATEWAY_ALLOWED_ORIGIN=http://localhost:5173
 PYTHON_AGENT_BASE_URL=http://127.0.0.1:8800
+PYTHON_RAG_BASE_URL=http://127.0.0.1:8803
 PYTHON_INTERNAL_TOKEN=<与 Python 服务相同的内部 token>
 USER_TOKEN_TTL_HOURS=168
+RAG_ALLOWED_ROOT=/srv/pdf-learning/uploads
+RAG_BUILD_TIMEOUT_SECONDS=1800
+RAG_MCP_TIMEOUT=30
+MEMORY_MCP_TIMEOUT=90
 
 AGENT_MODEL_WINDOW=128000
 AGENT_MAX_CONTEXT_TOKENS=100000
@@ -105,6 +121,8 @@ AGENT_SUMMARY_MAX_TOKENS=2000
 AGENT_KEEP_RECENT_TURNS=5
 ```
 
+`RAG_ALLOWED_ROOT` 必须与 Python RAG 构建进程使用同一宿主机目录。Java 只在
+`<root>/<user_id>/<document_id>/` 下保存原文件和转换产物；浏览器不能提交服务器路径。
 `MYSQL_JDBC_URL`、`MYSQL_USER` 和 `MYSQL_PASSWORD` 与 UserServer 相同。构建后的同一
 个 Interface fat jar 包含两个入口：
 
@@ -112,7 +130,7 @@ AGENT_KEEP_RECENT_TURNS=5
 # 内部数据接口（jar 默认 Main-Class）
 java -jar Interface/target/agent-interface-0.1.0-SNAPSHOT.jar
 
-# 面向前端的 Agent 网关
+# 面向前端的统一网关（用户接口与 Agent 接口使用同一端口）
 java -cp Interface/target/agent-interface-0.1.0-SNAPSHOT.jar \
   com.pdflearning.backend.interfaceapi.AgentGatewayServer
 ```
@@ -121,8 +139,8 @@ User 模块的普通 jar 供 Interface 编译依赖，独立服务使用
 `java -jar User/target/user-0.1.0-SNAPSHOT-all.jar` 启动。这样 Interface 打包时不会
 再次嵌套 User 的全部第三方依赖。
 
-只有 AgentGatewayServer 启动时恢复遗留的 `running` 记录。重启内部数据接口不会
-中断仍在网关中执行的运行。
+只有 AgentGatewayServer 启动时恢复遗留的 `running` 记录，并把上次进程遗留的
+`converting` / `building` 文档标为失败。重启内部数据接口不会中断仍在网关中执行的运行。
 
 ## Java 调用 Python Agent
 
@@ -135,6 +153,9 @@ User 模块的普通 jar 供 Interface 编译依赖，独立服务使用
 - 增量解析 `event` / `data` SSE 帧；
 - 校验事件的 request_id、session_id 和连续 event_seq；
 - 在连接未收到 run_finished 就结束时报告中断。
+
+Java 到 Uvicorn 的会话、SSE 和 RAG 构建客户端固定使用 HTTP/1.1，避免 JDK
+`HttpClient` 的明文 HTTP/2 upgrade 与 Uvicorn 产生请求正文解析冲突。
 
 业务入口通过 `AgentRunService.execute` 调用。服务会先按 request ID 登记运行，逐条
 把完整事件 JSON 落库，成功后才交给 consumer 转发：

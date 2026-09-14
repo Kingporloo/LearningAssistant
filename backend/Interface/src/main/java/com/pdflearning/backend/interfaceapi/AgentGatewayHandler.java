@@ -6,37 +6,56 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.pdflearning.backend.dataport.ChatDataPort;
 import com.pdflearning.backend.dataport.ContextSummaryDataPort;
 import com.pdflearning.backend.dataport.DataPortException;
+import com.pdflearning.backend.dataport.DocumentDataPort;
+import com.pdflearning.backend.dataport.RagDocumentStore;
+import com.pdflearning.backend.user.UserRequestHandler;
 import com.pdflearning.backend.user.UserService;
 import com.pdflearning.backend.user.UserServiceException;
 import com.sun.net.httpserver.HttpExchange;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.concurrent.Executor;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
-/** 面向前端的会话、聊天和手动 Compact HTTP 路由。 */
+/** 面向前端的统一 HTTP 路由；用户语义委托给 User，Agent 语义留在 Interface。 */
 final class AgentGatewayHandler {
+    private static final int MAX_USER_REQUEST_BYTES = 64 * 1024;
+    private static final int MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
     private static final int MAX_TITLE_LENGTH = 100;
     private static final int MAX_MESSAGE_LENGTH = 500_000;
     private static final Pattern PUBLIC_ID = Pattern.compile("[A-Za-z0-9_.:-]{1,120}");
     private static final Pattern SESSION_ID = Pattern.compile("[A-Za-z0-9_-]{1,160}");
 
     private final UserService users;
+    private final UserRequestHandler userRequests;
     private final AgentGatewayHttp http;
     private final AgentSessionService sessions;
     private final AgentRunCoordinator runs;
+    private final DocumentService documents;
 
     AgentGatewayHandler(
             UserService users,
             ChatDataPort chats,
             ContextSummaryDataPort summaries,
+            DocumentDataPort documentData,
+            RagDocumentStore ragDocuments,
+            RagBuildClient ragBuilder,
+            Path uploadRoot,
+            Executor executor,
             AgentControlClient controlClient,
             AgentRunService runService,
             AgentRunRequest.AgentConfig agentConfig,
             String allowedOrigin,
             ObjectMapper mapper) {
         this.users = users;
+        this.userRequests = new UserRequestHandler(users, mapper);
         this.http = new AgentGatewayHttp(allowedOrigin, mapper);
         this.sessions = new AgentSessionService(chats, controlClient, mapper);
+        this.documents = new DocumentService(
+                documentData, ragDocuments, ragBuilder, uploadRoot, executor, mapper);
         var snapshots = new AgentContextSnapshotFactory(chats, summaries, mapper);
         this.runs = new AgentRunCoordinator(
                 chats,
@@ -56,7 +75,12 @@ final class AgentGatewayHandler {
                 http.send(exchange, 204, null);
                 return;
             }
-            route(exchange, authenticate(exchange));
+            String path = normalizePath(exchange.getRequestURI().getPath());
+            if (isUserRoute(path)) {
+                handleUserRequest(exchange, path);
+                return;
+            }
+            route(exchange, path, authenticate(exchange));
         } catch (AgentGatewayException failure) {
             http.send(exchange, failure.status(), http.error(failure.getMessage()));
         } catch (UserServiceException failure) {
@@ -68,15 +92,23 @@ final class AgentGatewayHandler {
         }
     }
 
-    private void route(HttpExchange exchange, String userId) {
+    private void route(HttpExchange exchange, String path, String userId) {
         String method = exchange.getRequestMethod();
-        String path = normalizePath(exchange.getRequestURI().getPath());
         if ("/sessions".equals(path)) {
             handleSessions(exchange, method, userId);
             return;
         }
+        if ("/documents".equals(path)) {
+            handleDocuments(exchange, method, userId);
+            return;
+        }
 
         String[] parts = path.split("/");
+        if (parts.length == 3 && "documents".equals(parts[1]) && "DELETE".equals(method)) {
+            documents.delete(userId, requiredPublicPathId(parts[2], "document_id"));
+            http.send(exchange, 204, null);
+            return;
+        }
         if (parts.length < 3 || !"sessions".equals(parts[1])) {
             throw new AgentGatewayException(404, "接口不存在");
         }
@@ -99,6 +131,38 @@ final class AgentGatewayHandler {
         } else {
             throw new AgentGatewayException(404, "接口不存在");
         }
+    }
+
+    private void handleDocuments(HttpExchange exchange, String method, String userId) {
+        if ("GET".equals(method)) {
+            http.send(exchange, 200, documents.list(userId));
+            return;
+        }
+        if (!"POST".equals(method)) {
+            throw new AgentGatewayException(405, "请求方法不受支持");
+        }
+        String fileName = queryParameter(exchange, "filename");
+        http.ensureContentLength(exchange, MAX_UPLOAD_BYTES);
+        byte[] content = http.readBody(exchange, MAX_UPLOAD_BYTES);
+        http.send(exchange, 202, documents.upload(userId, fileName, content));
+    }
+
+    private void handleUserRequest(HttpExchange exchange, String path) {
+        JsonNode body;
+        try {
+            body = userRequests.parseBody(http.readBody(exchange, MAX_USER_REQUEST_BYTES));
+        } catch (java.io.IOException exception) {
+            throw new AgentGatewayException(400, "请求正文不是有效 JSON");
+        }
+        var response = userRequests.handle(
+                exchange.getRequestMethod(),
+                path.substring(1),
+                body,
+                exchange.getRequestHeaders().getFirst("Authorization"));
+        if (response.allowHeader() != null) {
+            exchange.getResponseHeaders().set("Allow", response.allowHeader());
+        }
+        http.sendJson(exchange, response.statusCode(), response.bodyJson());
     }
 
     private void handleSessions(HttpExchange exchange, String method, String userId) {
@@ -185,6 +249,33 @@ final class AgentGatewayHandler {
         return value;
     }
 
+    private static String requiredPublicPathId(String value, String name) {
+        if (value == null || !PUBLIC_ID.matcher(value).matches()) {
+            throw new AgentGatewayException(400, name + " 格式无效");
+        }
+        return value;
+    }
+
+    private static String queryParameter(HttpExchange exchange, String name) {
+        String query = exchange.getRequestURI().getRawQuery();
+        if (query == null) {
+            throw new AgentGatewayException(400, "缺少查询参数 " + name);
+        }
+        try {
+            for (String item : query.split("&")) {
+                int separator = item.indexOf('=');
+                if (separator >= 0 && name.equals(URLDecoder.decode(
+                        item.substring(0, separator), StandardCharsets.UTF_8))) {
+                    return URLDecoder.decode(
+                            item.substring(separator + 1), StandardCharsets.UTF_8);
+                }
+            }
+        } catch (IllegalArgumentException exception) {
+            throw new AgentGatewayException(400, "查询参数编码无效");
+        }
+        throw new AgentGatewayException(400, "缺少查询参数 " + name);
+    }
+
     private static String normalizePath(String path) {
         if (path == null || path.isBlank()) {
             return "/";
@@ -192,5 +283,13 @@ final class AgentGatewayHandler {
         return path.length() > 1 && path.endsWith("/")
                 ? path.substring(0, path.length() - 1)
                 : path;
+    }
+
+    private static boolean isUserRoute(String path) {
+        return switch (path) {
+            case "/auth/register", "/auth/login", "/auth/logout", "/auth/me",
+                    "/users/me", "/users/me/password" -> true;
+            default -> false;
+        };
     }
 }

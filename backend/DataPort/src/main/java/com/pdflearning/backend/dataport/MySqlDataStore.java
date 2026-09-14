@@ -287,6 +287,85 @@ public final class MySqlDataStore {
         }
     }
 
+    public boolean beginRagDocumentBuild(String userId, String documentId, String requestId) {
+        try (var connection = dataSource.getConnection();
+                var statement = connection.prepareStatement("""
+                        UPDATE rag_document
+                        SET status = 'building', status_message = '正在写入索引。',
+                            updated_at = CURRENT_TIMESTAMP(6)
+                        WHERE user_id = ? AND document_id = ? AND build_request_id = ?
+                          AND status <> 'deleted'
+                        """)) {
+            statement.setString(1, userId);
+            statement.setString(2, documentId);
+            statement.setString(3, requestId);
+            return statement.executeUpdate() == 1;
+        } catch (SQLException exception) {
+            throw new DataPortException("MySQL 开始 RAG 文档入库失败", exception);
+        }
+    }
+
+    public boolean finishRagDocumentBuild(
+            String userId,
+            String documentId,
+            String requestId,
+            String status,
+            String message) {
+        try (var connection = dataSource.getConnection();
+                var statement = connection.prepareStatement("""
+                        UPDATE rag_document
+                        SET status = ?, status_message = ?, updated_at = CURRENT_TIMESTAMP(6)
+                        WHERE user_id = ? AND document_id = ? AND build_request_id = ?
+                          AND status = 'building'
+                        """)) {
+            statement.setString(1, status);
+            statement.setString(2, message);
+            statement.setString(3, userId);
+            statement.setString(4, documentId);
+            statement.setString(5, requestId);
+            return statement.executeUpdate() == 1;
+        } catch (SQLException exception) {
+            throw new DataPortException("MySQL 完成 RAG 文档入库失败", exception);
+        }
+    }
+
+    public void failRagDocumentBuild(
+            String userId,
+            String documentId,
+            String requestId,
+            String message) {
+        try (var connection = dataSource.getConnection();
+                var statement = connection.prepareStatement("""
+                        UPDATE rag_document
+                        SET status = 'failed', status_message = ?, updated_at = CURRENT_TIMESTAMP(6)
+                        WHERE user_id = ? AND document_id = ? AND build_request_id = ?
+                          AND status <> 'deleted'
+                        """)) {
+            statement.setString(1, message);
+            statement.setString(2, userId);
+            statement.setString(3, documentId);
+            statement.setString(4, requestId);
+            statement.executeUpdate();
+        } catch (SQLException exception) {
+            throw new DataPortException("MySQL 标记 RAG 文档入库失败", exception);
+        }
+    }
+
+    public boolean markRagDocumentDeleted(String userId, String documentId) {
+        try (var connection = dataSource.getConnection();
+                var statement = connection.prepareStatement("""
+                        UPDATE rag_document
+                        SET status = 'deleted', updated_at = CURRENT_TIMESTAMP(6)
+                        WHERE user_id = ? AND document_id = ? AND status <> 'deleted'
+                        """)) {
+            statement.setString(1, userId);
+            statement.setString(2, documentId);
+            return statement.executeUpdate() == 1;
+        } catch (SQLException exception) {
+            throw new DataPortException("MySQL 删除 RAG 文档失败", exception);
+        }
+    }
+
     private int insertMemory(
             Connection connection,
             String userId,

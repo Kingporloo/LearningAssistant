@@ -600,6 +600,41 @@ def _convert_pdf(
     )
 
 
+def convert_file(
+    source: str | Path,
+    destination: str | Path,
+    *,
+    pdf_parser: str = "docling",
+    pdf_mode: str = "auto",
+    device: str = "auto",
+    ocr: str = "auto",
+) -> Path:
+    """把单个受控文件转换到指定 Markdown 路径。"""
+
+    src = Path(source)
+    dst = Path(destination)
+    with src.open("rb") as fh:
+        head = fh.read(5)
+    if _is_pdf(src, head):
+        markdown = _convert_pdf(
+            src,
+            pdf_parser=pdf_parser,
+            page_markers=True,
+            metadata=True,
+            pages_spec=None,
+            mode=pdf_mode,
+            device=device,
+            ocr=ocr,
+        )
+    elif src.suffix.lower() == ".md":
+        markdown = src.read_text(encoding="utf-8")
+    else:
+        markdown = convert_generic(src)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text(markdown, encoding="utf-8")
+    return dst
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="把文件转换为 Markdown（PDF 用 docling 恢复结构，其他用 markitdown）"
@@ -660,24 +695,35 @@ def main() -> int:
         print(f"{src} -> {dst}")
         start = time.monotonic()
         try:
-            head = b""
-            with open(src, "rb") as fh:
+            with src.open("rb") as fh:
                 head = fh.read(5)
-            if _is_pdf(src, head):
-                markdown = _convert_pdf(
+            if args.pages or args.no_page_markers or args.no_metadata:
+                markdown = (
+                    _convert_pdf(
+                        src,
+                        pdf_parser=args.pdf_parser,
+                        page_markers=not args.no_page_markers,
+                        metadata=not args.no_metadata,
+                        pages_spec=args.pages if args.pages else None,
+                        mode=args.pdf_mode,
+                        device=args.device,
+                        ocr=args.ocr,
+                    )
+                    if _is_pdf(src, head)
+                    else convert_generic(src)
+                )
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_text(markdown, encoding="utf-8")
+            else:
+                convert_file(
                     src,
+                    dst,
                     pdf_parser=args.pdf_parser,
-                    page_markers=not args.no_page_markers,
-                    metadata=not args.no_metadata,
-                    pages_spec=args.pages if args.pages else None,
-                    mode=args.pdf_mode,
+                    pdf_mode=args.pdf_mode,
                     device=args.device,
                     ocr=args.ocr,
                 )
-            else:
-                markdown = convert_generic(src)
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_text(markdown, encoding="utf-8")
+                markdown = dst.read_text(encoding="utf-8")
             elapsed = time.monotonic() - start
             print(f"  完成，{len(markdown)} 字符，耗时 {elapsed:.1f}s")
             ok += 1

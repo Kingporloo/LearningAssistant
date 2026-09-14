@@ -83,12 +83,14 @@ class MCPClient:
                 transport="streamable_http",
                 url=os.getenv("RAG_MCP_URL", "http://127.0.0.1:8801/mcp"),
                 internal_token=token,
+                timeout=float(os.getenv("RAG_MCP_TIMEOUT", "30")),
             ),
             MCPServerConfig(
                 name="memory",
                 transport="streamable_http",
                 url=os.getenv("MEMORY_MCP_URL", "http://127.0.0.1:8802/mcp"),
                 internal_token=token,
+                timeout=float(os.getenv("MEMORY_MCP_TIMEOUT", "90")),
             ),
         ])
 

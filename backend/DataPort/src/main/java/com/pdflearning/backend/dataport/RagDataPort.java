@@ -6,7 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-public final class RagDataPort {
+public final class RagDataPort implements RagDocumentStore {
     public record BuildCommand(
             String userId,
             String requestId,
@@ -72,8 +72,13 @@ public final class RagDataPort {
 
     public Map<String, Object> replaceDocument(BuildCommand command) {
         validateBuild(command);
-        mysql.setRagDocumentStatus(
-                command.userId(), command.documentId(), command.requestId(), "building", "正在写入索引。");
+        if (!mysql.beginRagDocumentBuild(
+                command.userId(), command.documentId(), command.requestId())) {
+            return Map.of(
+                    "status", "cancelled",
+                    "document_id", command.documentId(),
+                    "message", "文档已删除或构建请求已失效。");
+        }
         try {
             milvus.replaceDocument(command.userId(), command.documentId(), command.chunks());
             graphStore.replaceRagDocument(
@@ -83,20 +88,53 @@ public final class RagDataPort {
                     command.nextEdges(),
                     command.similarEdges());
             var status = command.chunks().isEmpty() ? "empty" : "ready";
-            mysql.setRagDocumentStatus(
-                    command.userId(), command.documentId(), command.requestId(), status, command.message());
+            if (!mysql.finishRagDocumentBuild(
+                    command.userId(), command.documentId(), command.requestId(), status, command.message())) {
+                milvus.deleteDocument(command.userId(), command.documentId());
+                graphStore.deleteRagDocument(command.userId(), command.documentId());
+                return Map.of(
+                        "status", "cancelled",
+                        "document_id", command.documentId(),
+                        "message", "文档在构建期间被删除，已清理本次索引。");
+            }
             return Map.of(
                     "status", status,
                     "document_id", command.documentId(),
                     "chunk_count", command.chunks().size(),
                     "message", command.message() == null ? "RAG 文档已完成入库。" : command.message());
         } catch (RuntimeException exception) {
-            mysql.setRagDocumentStatus(
-                    command.userId(), command.documentId(), command.requestId(), "failed", exception.getMessage());
+            mysql.failRagDocumentBuild(
+                    command.userId(), command.documentId(), command.requestId(), exception.getMessage());
             return Map.of(
                     "status", "error",
                     "document_id", command.documentId(),
                     "message", "RAG 文档入库失败: " + exception.getMessage());
+        }
+    }
+
+    @Override
+    public Map<String, Object> deleteDocument(String userId, String documentId) {
+        requireText(userId, "user_id");
+        requireText(documentId, "document_id");
+        if (!mysql.markRagDocumentDeleted(userId, documentId)) {
+            return Map.of(
+                    "status", "not_found",
+                    "document_id", documentId,
+                    "message", "文档不存在。");
+        }
+        try {
+            milvus.deleteDocument(userId, documentId);
+            graphStore.deleteRagDocument(userId, documentId);
+            return Map.of(
+                    "status", "deleted",
+                    "document_id", documentId,
+                    "message", "文档已删除。");
+        } catch (RuntimeException exception) {
+            return Map.of(
+                    "status", "deleted",
+                    "document_id", documentId,
+                    "index_status", "unknown",
+                    "message", "文档已设为不可见，但索引清理结果未知。");
         }
     }
 

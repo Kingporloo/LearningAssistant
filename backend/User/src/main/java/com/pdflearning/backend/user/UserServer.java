@@ -21,7 +21,7 @@ import java.util.concurrent.Executors;
  * - USER_TOKEN_TTL_HOURS（默认 168，即 7 天）
  * - USER_ALLOWED_ORIGIN（默认 http://localhost:5173，跨域白名单）
  *
- * 用户表由 DataPort 的 V4__user.sql 在部署阶段初始化。
+ * 用户表由 DataPort 的 mysql-schema.sql 在部署阶段初始化。
  */
 public final class UserServer implements AutoCloseable {
     private static final int MAX_REQUEST_BYTES = 64 * 1024;

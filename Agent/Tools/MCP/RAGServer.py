@@ -6,7 +6,6 @@ import argparse
 import hmac
 import os
 import sys
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -76,22 +75,12 @@ def _run_context(ctx: Context) -> RunContext:
     )
 
 
-@asynccontextmanager
-async def _lifespan(_server: FastMCP):
-    try:
-        yield
-    finally:
-        if _system is not None:
-            await _system.aclose()
-
-
 mcp = FastMCP(
     "rag",
     host=_host,
     port=_port,
     stateless_http=True,
     json_response=True,
-    lifespan=_lifespan,
     auth=_auth_settings(),
     token_verifier=_InternalTokenVerifier(),
 )

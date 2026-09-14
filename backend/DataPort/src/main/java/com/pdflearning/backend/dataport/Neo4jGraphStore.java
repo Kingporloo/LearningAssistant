@@ -72,6 +72,17 @@ public final class Neo4jGraphStore implements AutoCloseable {
         }
     }
 
+    public void deleteRagDocument(String userId, String documentId) {
+        try (var session = driver.session(sessionConfig)) {
+            session.executeWriteWithoutResult(tx -> tx.run("""
+                    MATCH (chunk:RagChunk {user_id: $userId, document_id: $documentId})
+                    DETACH DELETE chunk
+                    """, Values.parameters(
+                    "userId", userId,
+                    "documentId", documentId)).consume());
+        }
+    }
+
     public void replaceSemanticMemory(
             String userId,
             String memoryId,

@@ -28,7 +28,7 @@ final class AgentGatewayHttp {
         }
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", origin);
         exchange.getResponseHeaders().set(
-                "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+                "Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
         exchange.getResponseHeaders().set(
                 "Access-Control-Allow-Headers", "Authorization, Content-Type");
         exchange.getResponseHeaders().set("Access-Control-Max-Age", "600");
@@ -36,15 +36,7 @@ final class AgentGatewayHttp {
     }
 
     ObjectNode readObject(HttpExchange exchange, Set<String> fields) {
-        byte[] bytes;
-        try (var input = exchange.getRequestBody()) {
-            bytes = input.readNBytes(MAX_REQUEST_BYTES + 1);
-        } catch (IOException exception) {
-            throw new AgentGatewayException(400, "无法读取请求正文");
-        }
-        if (bytes.length > MAX_REQUEST_BYTES) {
-            throw new AgentGatewayException(413, "请求正文过大");
-        }
+        byte[] bytes = readBody(exchange, MAX_REQUEST_BYTES);
         try {
             JsonNode value = bytes.length == 0
                     ? mapper.createObjectNode()
@@ -65,6 +57,37 @@ final class AgentGatewayHttp {
         }
     }
 
+    byte[] readBody(HttpExchange exchange, int maxBytes) {
+        byte[] bytes;
+        try (var input = exchange.getRequestBody()) {
+            bytes = input.readNBytes(maxBytes + 1);
+        } catch (IOException exception) {
+            throw new AgentGatewayException(400, "无法读取请求正文");
+        }
+        if (bytes.length > maxBytes) {
+            throw new AgentGatewayException(413, "请求正文过大");
+        }
+        return bytes;
+    }
+
+    void ensureContentLength(HttpExchange exchange, int maxBytes) {
+        String value = exchange.getRequestHeaders().getFirst("Content-Length");
+        if (value == null) {
+            return;
+        }
+        try {
+            long length = Long.parseLong(value);
+            if (length < 0) {
+                throw new AgentGatewayException(400, "Content-Length 无效");
+            }
+            if (length > maxBytes) {
+                throw new AgentGatewayException(413, "上传文件不能超过 50MB");
+            }
+        } catch (NumberFormatException exception) {
+            throw new AgentGatewayException(400, "Content-Length 无效");
+        }
+    }
+
     void send(HttpExchange exchange, int status, JsonNode body) {
         byte[] bytes = body == null
                 ? new byte[0]
@@ -80,6 +103,19 @@ final class AgentGatewayHttp {
                 }
             } else {
                 exchange.close();
+            }
+        } catch (IOException exception) {
+            exchange.close();
+        }
+    }
+
+    void sendJson(HttpExchange exchange, int status, String body) {
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        try {
+            exchange.sendResponseHeaders(status, bytes.length);
+            try (var output = exchange.getResponseBody()) {
+                output.write(bytes);
             }
         } catch (IOException exception) {
             exchange.close();

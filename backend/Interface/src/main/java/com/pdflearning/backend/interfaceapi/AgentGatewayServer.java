@@ -1,27 +1,28 @@
 package com.pdflearning.backend.interfaceapi;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.pdflearning.backend.dataport.MySqlDataPortResources;
+import com.pdflearning.backend.dataport.DataPortResources;
 import com.pdflearning.backend.user.UserService;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** 前端访问 Agent 的 Java 入口；身份、会话和持久化均在此处完成。 */
+/** 前端统一 Java 入口；提供用户接口、Agent 会话、运行与持久化。 */
 public final class AgentGatewayServer implements AutoCloseable {
     private final HttpServer server;
     private final ExecutorService executor;
-    private final MySqlDataPortResources resources;
+    private final DataPortResources resources;
 
     private AgentGatewayServer(
             HttpServer server,
             ExecutorService executor,
-            MySqlDataPortResources resources) {
+            DataPortResources resources) {
         this.server = server;
         this.executor = executor;
         this.resources = resources;
@@ -40,15 +41,14 @@ public final class AgentGatewayServer implements AutoCloseable {
         String allowedOrigin = environment.getOrDefault(
                 "AGENT_GATEWAY_ALLOWED_ORIGIN", "http://localhost:5173");
         String pythonToken = required(environment, "PYTHON_INTERNAL_TOKEN");
-        URI pythonBaseUrl;
-        try {
-            pythonBaseUrl = URI.create(environment.getOrDefault(
-                    "PYTHON_AGENT_BASE_URL", "http://127.0.0.1:8800"));
-        } catch (IllegalArgumentException exception) {
-            throw new IllegalStateException("PYTHON_AGENT_BASE_URL 无效", exception);
-        }
+        URI pythonBaseUrl = uri(
+                environment, "PYTHON_AGENT_BASE_URL", "http://127.0.0.1:8800");
+        URI pythonRagBaseUrl = uri(
+                environment, "PYTHON_RAG_BASE_URL", "http://127.0.0.1:8803");
+        Path uploadRoot = Path.of(required(environment, "RAG_ALLOWED_ROOT"));
 
-        var resources = MySqlDataPortResources.fromEnvironment(environment);
+        var resources = DataPortResources.from(environment);
+        ExecutorService executor = null;
         try {
             var mapper = new ObjectMapper();
             var users = new UserService(
@@ -57,23 +57,37 @@ public final class AgentGatewayServer implements AutoCloseable {
             var controlClient = new AgentControlClient(pythonBaseUrl, pythonToken);
             var runClient = new AgentSseClient(pythonBaseUrl, pythonToken);
             var runService = new AgentRunService(runClient, resources.agentRuns());
+            var ragBuilder = new RagBuildClient(
+                    pythonRagBaseUrl,
+                    pythonToken,
+                    Duration.ofSeconds(integer(environment, "RAG_BUILD_TIMEOUT_SECONDS", 1800)),
+                    mapper);
+            executor = Executors.newVirtualThreadPerTaskExecutor();
             var handler = new AgentGatewayHandler(
                     users,
                     resources.chats(),
                     resources.contextSummaries(),
+                    resources.documents(),
+                    resources.rag(),
+                    ragBuilder,
+                    uploadRoot,
+                    executor,
                     controlClient,
                     runService,
                     agentConfig(environment),
                     allowedOrigin,
                     mapper);
             resources.agentRuns().recoverInterruptedRuns();
+            resources.documents().recoverInterrupted();
 
             var server = HttpServer.create(new InetSocketAddress(host, port), 0);
-            var executor = Executors.newVirtualThreadPerTaskExecutor();
             server.createContext("/", handler::handle);
             server.setExecutor(executor);
             return new AgentGatewayServer(server, executor, resources);
         } catch (IOException | RuntimeException exception) {
+            if (executor != null) {
+                executor.close();
+            }
             resources.close();
             throw new IllegalStateException("无法启动 Agent 网关", exception);
         }
@@ -115,6 +129,21 @@ public final class AgentGatewayServer implements AutoCloseable {
             throw new IllegalStateException("缺少环境变量 " + name);
         }
         return value;
+    }
+
+    private static URI uri(
+            Map<String, String> environment,
+            String name,
+            String defaultValue) {
+        try {
+            var value = URI.create(environment.getOrDefault(name, defaultValue));
+            if (value.getScheme() == null || value.getHost() == null) {
+                throw new IllegalArgumentException();
+            }
+            return value;
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalStateException(name + " 无效", exception);
+        }
     }
 
     private static int integer(Map<String, String> environment, String name, int defaultValue) {
