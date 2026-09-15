@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from Agent.Context.ContextBuider import ContextBuildResult, ContextBuilder
 from Agent.Context.Process.Components.MemoryRecall import MemoryRecall
 from Agent.Context.Schemas.ContextUnit import ContextUnit, SessionSummary
-from Agent.Context.Schemas.Ledger import SessionLedger
+from Agent.Context.Schemas.Ledger import LedgerOperation, SessionLedger
 from Agent.Interface.BackendClient import RunContext
 
 if TYPE_CHECKING:
@@ -106,6 +106,8 @@ class AgentRunState(TypedDict):
     cached_memory: MemoryRecall | None
     session_summary: SessionSummary | None
     session_ledger: SessionLedger | None
+    ledger_base_version: int
+    ledger_operations: list[LedgerOperation]
     history_cursor: str | None
     context_revision: int
     context_result: ContextBuildResult | None

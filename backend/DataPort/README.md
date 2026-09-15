@@ -81,6 +81,7 @@ collection 并修改上述 collection 名称；旧向量不能直接复用，需
 | `agent_run` | `user_id + request_id` | 保存请求摘要、运行状态和最后事件序号 |
 | `agent_run_event` | `user_id + request_id + event_seq` | 保存 Python 发出的完整事件 JSON |
 | `session_summary` | `user_id + session_id` | 保存当前会话摘要及版本 |
+| `session_ledger` | `user_id + session_id` | 保存结构化会话状态、版本和可选覆盖位置 |
 | `context_summary_operation` | `user_id + request_id + operation_id` | 保存摘要写入的幂等结果 |
 | `chat_session` | 全局唯一 `session_id` | 保存正式会话归属、标题和删除状态 |
 | `chat_message` | 全局唯一 `message_id` | 保存用户可见问答及助手工具时间线 |
@@ -109,10 +110,14 @@ collection 并修改上述 collection 名称；旧向量不能直接复用，需
 | `/internal/storage/memory/graph/claim` | `memory().claimSemanticGraph()` |
 | `/internal/storage/memory/graph/complete` | `memory().completeSemanticGraph(command)` |
 | `/internal/storage/memory/graph/recover` | `memory().recoverSemanticGraphs()` |
+| `/internal/storage/history/search` | `sessionArchive().search(userId, sessionId, historyCursor, query, topK)` |
+| `/internal/storage/history/read` | `sessionArchive().read(userId, sessionId, historyCursor, refs)` |
 | `/internal/storage/context/summary` | `contextSummaries().store(storeCommand)` |
 
 Java 调用 Python Agent 时，`backend/Interface` 使用 `agentRuns()` 先登记运行，再逐条
-保存 SSE 事件。该端口不负责网络调用或前端转发。
+保存 SSE 事件。`session_ledger_patch` 与事件记录在同一事务中按 base_version 应用；
+下一轮由 `sessionLedgers()` 恢复。`sessionArchive()` 直接搜索权威聊天正文，并在
+可信快照范围内回读原始跨度。该端口不负责网络调用或前端转发。
 
 Memory 请求中的 `scope` 只允许为 `user`；Working Memory 由 Python 处理，不映射到
 DataPort。长期记忆正文与向量完成后即可返回，语义实体关系由 Python 工作进程通过

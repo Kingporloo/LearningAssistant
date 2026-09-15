@@ -89,6 +89,8 @@ class SessionSummary:
     text: str
     through_message_id: str | None = None
     source_refs: list[SourceRef] = field(default_factory=list)
+    usable: bool = True
+    invalid_reason: str | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.version, bool) or not isinstance(self.version, int):
@@ -106,6 +108,16 @@ class SessionSummary:
         if any(not isinstance(ref, SourceRef) for ref in refs):
             raise TypeError("summary.source_refs 只能包含 SourceRef")
         self.source_refs = refs
+        if not isinstance(self.usable, bool):
+            raise TypeError("summary.usable 必须是 bool")
+        self.invalid_reason = _optional_text(
+            self.invalid_reason,
+            "summary.invalid_reason",
+        )
+        if self.usable and self.invalid_reason is not None:
+            raise ValueError("可用摘要不能包含 invalid_reason")
+        if not self.usable and self.invalid_reason is None:
+            raise ValueError("不可用摘要必须包含 invalid_reason")
 
 
 @dataclass(slots=True)

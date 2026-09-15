@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.pdflearning.backend.dataport.ContextSummaryDataPort;
 import com.pdflearning.backend.dataport.MemoryDataPort;
 import com.pdflearning.backend.dataport.RagDataPort;
+import com.pdflearning.backend.dataport.SessionArchiveDataPort;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -17,6 +18,8 @@ final class DataPortRequestHandler {
         MEMORY_QUERY,
         MEMORY_STORE,
         MEMORY_FORGET,
+        HISTORY_SEARCH,
+        HISTORY_READ,
         CONTEXT_SUMMARY_STORE
     }
 
@@ -29,14 +32,17 @@ final class DataPortRequestHandler {
     private final ContextSummaryDataPort summaries;
     private final MemoryDataPort memory;
     private final RagDataPort rag;
+    private final SessionArchiveDataPort archive;
 
     DataPortRequestHandler(
             MemoryDataPort memory,
             RagDataPort rag,
-            ContextSummaryDataPort summaries) {
+            ContextSummaryDataPort summaries,
+            SessionArchiveDataPort archive) {
         this.memory = memory;
         this.rag = rag;
         this.summaries = summaries;
+        this.archive = archive;
     }
 
     Map<String, Object> handle(
@@ -55,8 +61,64 @@ final class DataPortRequestHandler {
             case MEMORY_QUERY -> memory.query(memoryQuery(context, body));
             case MEMORY_STORE -> memory.store(memoryStore(context, body));
             case MEMORY_FORGET -> memory.forget(memoryForget(context, body));
+            case HISTORY_SEARCH -> historySearch(context, body);
+            case HISTORY_READ -> historyRead(context, body);
             case CONTEXT_SUMMARY_STORE -> summaries.store(contextSummary(context, body));
         };
+    }
+
+    private Map<String, Object> historySearch(
+            InternalRequestContext context,
+            JsonNode body) {
+        var hits = archive.search(
+                context.userId(), context.sessionId(),
+                requiredText(body, "history_cursor"),
+                requiredText(body, "query"),
+                integer(body, "top_k"));
+        var results = new ArrayList<Map<String, Object>>();
+        for (var hit : hits) {
+            results.add(Map.of(
+                    "message_id", hit.messageId(),
+                    "span_id", hit.spanId(),
+                    "role", hit.role(),
+                    "preview", hit.preview(),
+                    "score", hit.score(),
+                    "created_at", hit.createdAt()));
+        }
+        return Map.of(
+                "status", results.isEmpty() ? "not_found" : "ok",
+                "results", results,
+                "message", results.isEmpty() ? "未找到相关历史原文。" : "找到相关历史原文。");
+    }
+
+    private Map<String, Object> historyRead(
+            InternalRequestContext context,
+            JsonNode body) {
+        var refs = new ArrayList<SessionArchiveDataPort.Ref>();
+        for (var item : array(body, "refs")) {
+            if (!item.isObject()) {
+                throw new IllegalArgumentException("refs 的元素必须是对象");
+            }
+            refs.add(new SessionArchiveDataPort.Ref(
+                    requiredText(item, "message_id"),
+                    requiredText(item, "span_id")));
+        }
+        var values = archive.read(
+                context.userId(), context.sessionId(),
+                requiredText(body, "history_cursor"), refs);
+        var results = new ArrayList<Map<String, Object>>();
+        for (var value : values) {
+            results.add(Map.of(
+                    "message_id", value.messageId(),
+                    "span_id", value.spanId(),
+                    "role", value.role(),
+                    "content", value.content(),
+                    "created_at", value.createdAt()));
+        }
+        return Map.of(
+                "status", results.isEmpty() ? "not_found" : "ok",
+                "results", results,
+                "message", results.isEmpty() ? "历史原文不存在。" : "历史原文读取成功。");
     }
 
     Map<String, Object> handleWorker(WorkerOperation operation, JsonNode body) {

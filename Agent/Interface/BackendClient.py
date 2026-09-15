@@ -264,6 +264,40 @@ class BackendClient:
             write=True,
         )
 
+    async def history_search(
+        self,
+        context: RunContext,
+        *,
+        history_cursor: str,
+        query: str,
+        top_k: int = 20,
+    ) -> dict[str, Any]:
+        return await self._post(
+            "/internal/storage/history/search",
+            context,
+            {
+                "history_cursor": history_cursor,
+                "query": query,
+                "top_k": top_k,
+            },
+        )
+
+    async def history_read(
+        self,
+        context: RunContext,
+        *,
+        history_cursor: str,
+        refs: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        return await self._post(
+            "/internal/storage/history/read",
+            context,
+            {
+                "history_cursor": history_cursor,
+                "refs": refs,
+            },
+        )
+
     async def context_summary_store(
         self,
         context: RunContext,

@@ -4,10 +4,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.pdflearning.backend.dataport.ChatDataPort;
+import com.pdflearning.backend.dataport.AgentRunDataPort;
 import com.pdflearning.backend.dataport.ContextSummaryDataPort;
 import com.pdflearning.backend.dataport.DataPortException;
 import com.pdflearning.backend.dataport.DocumentDataPort;
 import com.pdflearning.backend.dataport.RagDocumentStore;
+import com.pdflearning.backend.dataport.SessionLedgerDataPort;
 import com.pdflearning.backend.user.UserRequestHandler;
 import com.pdflearning.backend.user.UserService;
 import com.pdflearning.backend.user.UserServiceException;
@@ -39,7 +41,9 @@ final class AgentGatewayHandler {
     AgentGatewayHandler(
             UserService users,
             ChatDataPort chats,
+            AgentRunDataPort agentRuns,
             ContextSummaryDataPort summaries,
+            SessionLedgerDataPort sessionLedgers,
             DocumentDataPort documentData,
             RagDocumentStore ragDocuments,
             RagBuildClient ragBuilder,
@@ -56,7 +60,8 @@ final class AgentGatewayHandler {
         this.sessions = new AgentSessionService(chats, controlClient, mapper);
         this.documents = new DocumentService(
                 documentData, ragDocuments, ragBuilder, uploadRoot, executor, mapper);
-        var snapshots = new AgentContextSnapshotFactory(chats, summaries, mapper);
+        var snapshots = new AgentContextSnapshotFactory(
+                chats, agentRuns, summaries, sessionLedgers, mapper);
         this.runs = new AgentRunCoordinator(
                 chats,
                 controlClient,

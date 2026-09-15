@@ -13,6 +13,8 @@ public final class DataPortResources implements AutoCloseable {
     private final UserDataPort users;
     private final ChatDataPort chats;
     private final AgentRunDataPort agentRuns;
+    private final SessionLedgerDataPort sessionLedgers;
+    private final SessionArchiveDataPort sessionArchive;
     private final DocumentDataPort documents;
     private final ContextSummaryDataPort contextSummaries;
     private final MemoryDataPort memory;
@@ -24,6 +26,8 @@ public final class DataPortResources implements AutoCloseable {
             UserDataPort users,
             ChatDataPort chats,
             AgentRunDataPort agentRuns,
+            SessionLedgerDataPort sessionLedgers,
+            SessionArchiveDataPort sessionArchive,
             DocumentDataPort documents,
             ContextSummaryDataPort contextSummaries,
             MemoryDataPort memory,
@@ -33,6 +37,8 @@ public final class DataPortResources implements AutoCloseable {
         this.users = users;
         this.chats = chats;
         this.agentRuns = agentRuns;
+        this.sessionLedgers = sessionLedgers;
+        this.sessionArchive = sessionArchive;
         this.documents = documents;
         this.contextSummaries = contextSummaries;
         this.memory = memory;
@@ -82,12 +88,15 @@ public final class DataPortResources implements AutoCloseable {
             var graph = new Neo4jGraphStore(
                     neo4jDriver, environment.getOrDefault("NEO4J_DATABASE", "neo4j"));
             var mysql = new MySqlDataStore(dataSource);
+            var ledgers = new SessionLedgerDataPort(dataSource);
             return new DataPortResources(
                     dataSource,
                     graph,
                     new UserDataPort(dataSource),
                     new ChatDataPort(dataSource),
-                    new AgentRunDataPort(dataSource),
+                    new AgentRunDataPort(dataSource, ledgers),
+                    ledgers,
+                    new SessionArchiveDataPort(dataSource),
                     new DocumentDataPort(dataSource),
                     new ContextSummaryDataPort(dataSource),
                     new MemoryDataPort(mysql, qdrant, graph, vectorDimension),
@@ -112,6 +121,14 @@ public final class DataPortResources implements AutoCloseable {
 
     public AgentRunDataPort agentRuns() {
         return agentRuns;
+    }
+
+    public SessionLedgerDataPort sessionLedgers() {
+        return sessionLedgers;
+    }
+
+    public SessionArchiveDataPort sessionArchive() {
+        return sessionArchive;
     }
 
     public DocumentDataPort documents() {

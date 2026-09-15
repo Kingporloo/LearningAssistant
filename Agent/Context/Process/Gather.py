@@ -6,6 +6,7 @@ from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from Agent.Context.Process.Components.ArchiveRecall import ArchiveRecall, gather_archive
 from Agent.Context.Process.Components.MemoryRecall import MemoryRecall, gather_memory
 from Agent.Context.Process.Components.ReferenceResolver import resolve_reference_ids
 from Agent.Context.Schemas.ContextUnit import (
@@ -23,6 +24,7 @@ from Agent.Context.Schemas.Ledger import (
     LedgerStatus,
     SessionLedger,
 )
+from Agent.Interface.BackendClient import BackendClient, RunContext
 
 
 _MANDATORY_LEDGER_TYPES = {
@@ -40,6 +42,7 @@ class GatherResult:
     protected_ids: set[str]
     reference_ids: list[str]
     memory: MemoryRecall
+    archive: ArchiveRecall
 
 
 async def gather(
@@ -55,6 +58,9 @@ async def gather(
     keep_recent_turns: int = 5,
     cached_memory: MemoryRecall | None = None,
     recall_memory: bool = True,
+    backend_client: BackendClient | None = None,
+    run_context: RunContext | None = None,
+    history_cursor: str | None = None,
 ) -> GatherResult:
     """收集上下文，不执行选择、压缩、持久化或模型生成。"""
 
@@ -69,7 +75,7 @@ async def gather(
     compactable: list[ContextUnit] = []
     protected_ids = {current_query.id}
 
-    if session_summary is not None:
+    if session_summary is not None and session_summary.usable:
         summary_unit = _summary_unit(session_summary, current_query, count_tokens)
         mandatory.append(summary_unit)
         compactable.append(summary_unit)
@@ -94,6 +100,23 @@ async def gather(
         mandatory.extend(promoted)
         protected_ids.update(reference_set)
         candidates = [unit for unit in candidates if unit.id not in reference_set]
+
+    archive = (
+        await gather_archive(
+            current_query=current_query,
+            run_context=run_context,
+            backend=backend_client,
+            history_cursor=history_cursor,
+            session_summary=session_summary,
+            visible_message_ids={
+                unit.source_ref.ref_id for unit in history_units
+            },
+            count_tokens=count_tokens,
+        )
+        if run_context is not None
+        else ArchiveRecall()
+    )
+    candidates.extend(archive.units)
 
     if session_ledger is not None:
         for entry in session_ledger.entries:
@@ -146,6 +169,7 @@ async def gather(
         protected_ids=protected_ids,
         reference_ids=reference_ids,
         memory=memory,
+        archive=archive,
     )
 
 

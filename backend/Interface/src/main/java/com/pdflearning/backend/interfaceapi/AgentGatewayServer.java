@@ -66,7 +66,9 @@ public final class AgentGatewayServer implements AutoCloseable {
             var handler = new AgentGatewayHandler(
                     users,
                     resources.chats(),
+                    resources.agentRuns(),
                     resources.contextSummaries(),
+                    resources.sessionLedgers(),
                     resources.documents(),
                     resources.rag(),
                     ragBuilder,

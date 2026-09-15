@@ -74,9 +74,10 @@ def build_tool_record(
         text=content,
         source_ref=SourceRef(
             kind=SourceKind.TOOL_EVENT,
-            ref_id=tool_call_id,
+            ref_id=f"{run_context.request_id}:{tool_call_id}",
             session_id=run_context.session_id,
             metadata={
+                "tool_call_id": tool_call_id,
                 "tool_name": name,
                 "model_step": model_step,
                 "business_status": business_status,

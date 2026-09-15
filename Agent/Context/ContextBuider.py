@@ -188,6 +188,9 @@ class ContextBuilder:
             keep_recent_turns=self.config.keep_recent_turns,
             cached_memory=state.cached_memory,
             recall_memory=state.recall_memory,
+            backend_client=self.backend_client,
+            run_context=state.run_context,
+            history_cursor=state.history_cursor,
         )
         budget = self._budget(state, gathered.mandatory)
         selection = select(
@@ -253,11 +256,10 @@ class ContextBuilder:
         state: ContextState,
     ) -> list[ContextUnit]:
         included = set(prepared.request.included_unit_ids)
-        execution_ids = {unit.id for unit in state.execution_units}
         return [
             unit
             for unit in prepared.gathered.compactable
-            if unit.id in included and unit.id not in execution_ids
+            if unit.id in included
         ]
 
     async def _compact_and_save(
@@ -377,7 +379,7 @@ def _compacted_dialogue_cursor(
 ) -> str | None:
     cursor = (
         state.session_summary.through_message_id
-        if state.session_summary is not None
+        if state.session_summary is not None and state.session_summary.usable
         else None
     )
     for user_message, assistant_message in state.dialogue_turns:
@@ -399,6 +401,8 @@ def _session_summary(raw: Any) -> SessionSummary:
         text=raw.get("text"),
         through_message_id=raw.get("through_message_id"),
         source_refs=[SourceRef(**ref) for ref in refs],
+        usable=raw.get("usable", True),
+        invalid_reason=raw.get("invalid_reason"),
     )
 
 

@@ -143,6 +143,22 @@ CREATE TABLE IF NOT EXISTS context_summary_operation (
     KEY idx_summary_operation_session (user_id, session_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+CREATE TABLE IF NOT EXISTS session_ledger (
+    user_id VARCHAR(128) NOT NULL,
+    session_id VARCHAR(160) NOT NULL,
+    version INT NOT NULL,
+    compacted_through_message_id VARCHAR(160) NULL,
+    entries_json JSON NOT NULL,
+    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+        ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (user_id, session_id),
+    CONSTRAINT fk_ledger_session
+        FOREIGN KEY (user_id, session_id)
+        REFERENCES agent_session (user_id, session_id),
+    CONSTRAINT chk_ledger_version CHECK (version > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 CREATE TABLE IF NOT EXISTS users (
     user_id VARCHAR(64) NOT NULL PRIMARY KEY,
     username VARCHAR(32) NOT NULL UNIQUE,

@@ -273,6 +273,8 @@ def _summary_data(summary) -> dict[str, object] | None:
         "version": summary.version,
         "text": summary.text,
         "through_message_id": summary.through_message_id,
+        "usable": summary.usable,
+        "invalid_reason": summary.invalid_reason,
         "source_refs": [
             {
                 "kind": ref.kind.value,

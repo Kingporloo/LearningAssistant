@@ -7,6 +7,10 @@ from typing import Any
 from langchain_core.messages import AIMessage
 from langgraph.runtime import Runtime
 
+from Agent.Context.Process.Components.LedgerReducer import (
+    operations_from_tool_result,
+    reduce_ledger,
+)
 from Agent.Loop.Models import AgentRunState, RunDependencies
 from Agent.Loop.ToolResults import (
     ToolExecutionRecord,
@@ -31,6 +35,7 @@ async def execute_tools(
         return _failure("工具节点没有收到待执行的调用")
 
     records: list[ToolExecutionRecord] = []
+    ledger_operations = []
     memory_changed = False
     for call in message.tool_calls:
         call_id = call["id"]
@@ -62,12 +67,28 @@ async def execute_tools(
             forced_outcome=forced_outcome,
         )
         records.append(record)
+        try:
+            ledger_operations.extend(operations_from_tool_result(
+                record.result,
+                source_ref=f"{runtime.context.mcp_client.context.request_id}:{call_id}",
+            ))
+        except (TypeError, ValueError):
+            pass
         memory_changed = memory_changed or (
             name in _MEMORY_WRITE_TOOLS and record.business_status == "ok"
         )
         _write_finished(runtime, call_id, name, record)
 
     updates = _append_group(state, message, records)
+    if ledger_operations:
+        updates["session_ledger"] = reduce_ledger(
+            state["session_ledger"],
+            ledger_operations,
+        )
+        updates["ledger_operations"] = [
+            *state["ledger_operations"],
+            *ledger_operations,
+        ]
     updates.update({
         "cached_memory": None if memory_changed else state["cached_memory"],
         "tool_rounds": state["tool_rounds"] + 1,

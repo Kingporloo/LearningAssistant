@@ -78,6 +78,20 @@ class AgentGatewayHandlerTest {
             assertEquals(200, secondRun.statusCode());
             assertEquals(2, runCalls.get());
             assertEquals(1, receivedRun.get().path("recent_history").size());
+            assertEquals(1, receivedRun.get().path("execution_history").size());
+            assertEquals(
+                    "request_1:tool_call_1",
+                    receivedRun.get().path("execution_history").get(0)
+                            .path("tool_calls").get(0).path("tool_call_id").asText());
+            assertEquals(
+                    "教材片段",
+                    receivedRun.get().path("execution_history").get(0)
+                            .path("tool_results").get(0).path("content").asText());
+            assertEquals(1, receivedRun.get().path("session_ledger").path("version").asInt());
+            assertEquals(
+                    "理解注意力机制",
+                    receivedRun.get().path("session_ledger").path("entries").get(0)
+                            .path("content").asText());
             assertEquals(
                     "请解释注意力机制",
                     receivedRun.get()
@@ -222,6 +236,7 @@ class AgentGatewayHandlerTest {
             HttpServer python) throws Exception {
         var chats = new ChatDataPort(source);
         var runs = new AgentRunDataPort(source);
+        var ledgers = new com.pdflearning.backend.dataport.SessionLedgerDataPort(source);
         var summaries = new ContextSummaryDataPort(source);
         var documents = new DocumentDataPort(source);
         URI pythonBase = URI.create("http://127.0.0.1:" + python.getAddress().getPort());
@@ -229,7 +244,9 @@ class AgentGatewayHandlerTest {
         var handler = new AgentGatewayHandler(
                 users,
                 chats,
+                runs,
                 summaries,
+                ledgers,
                 documents,
                 new TestRagDocumentStore(source),
                 new RagBuildClient(pythonBase, "internal-token", Duration.ofSeconds(2), mapper),
@@ -267,11 +284,25 @@ class AgentGatewayHandlerTest {
             }
         });
         server.createContext("/internal/agent/runs", exchange -> {
-            runCalls.incrementAndGet();
+            int runNumber = runCalls.incrementAndGet();
             var run = mapper.readTree(exchange.getRequestBody());
             receivedRun.set(run);
             String requestId = run.path("request_id").asText();
             String sessionId = run.path("session_id").asText();
+            var ledgerEntry = mapper.createObjectNode();
+            ledgerEntry.put("id", "goal-attention");
+            ledgerEntry.put("type", "goal");
+            ledgerEntry.put("content", "理解注意力机制");
+            ledgerEntry.put("status", "active");
+            ledgerEntry.put("scope", "session");
+            ledgerEntry.put("created_at", "2026-09-15T08:00:00Z");
+            ledgerEntry.put("updated_at", "2026-09-15T08:00:00Z");
+            ledgerEntry.putArray("source_refs").add("request_1:tool_call_1");
+            ledgerEntry.putArray("supersedes");
+            var ledgerOperation = mapper.createObjectNode().put("op", "add");
+            ledgerOperation.set("entry", ledgerEntry);
+            var ledgerPatch = mapper.createObjectNode().put("base_version", 0);
+            ledgerPatch.putArray("operations").add(ledgerOperation);
             String events = event("run_started", requestId, sessionId, 1,
                             mapper.createObjectNode().put(
                                     "message_id", run.path("message_id").asText()))
@@ -305,7 +336,10 @@ class AgentGatewayHandlerTest {
                                             .put("input_tokens", 12)
                                             .put("output_tokens", 8)
                                             .put("total_tokens", 20)))
-                    + event("run_finished", requestId, sessionId, 6,
+                    + (runNumber == 1
+                            ? event("session_ledger_patch", requestId, sessionId, 6, ledgerPatch)
+                            : "")
+                    + event("run_finished", requestId, sessionId, runNumber == 1 ? 7 : 6,
                             mapper.createObjectNode()
                                     .put("status", "completed")
                                     .put("model_steps", 1)
@@ -521,6 +555,17 @@ class AgentGatewayHandlerTest {
                         through_message_id VARCHAR(160),
                         history_cursor VARCHAR(160),
                         source_refs_json CLOB NOT NULL,
+                        PRIMARY KEY (user_id, session_id))
+                    """);
+            statement.execute("""
+                    CREATE TABLE session_ledger (
+                        user_id VARCHAR(128) NOT NULL,
+                        session_id VARCHAR(160) NOT NULL,
+                        version INT NOT NULL,
+                        compacted_through_message_id VARCHAR(160),
+                        entries_json CLOB NOT NULL,
+                        created_at TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6) NOT NULL,
+                        updated_at TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6) NOT NULL,
                         PRIMARY KEY (user_id, session_id))
                     """);
             statement.execute("""

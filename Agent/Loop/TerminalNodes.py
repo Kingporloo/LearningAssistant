@@ -6,6 +6,7 @@ from typing import Any
 
 from langgraph.runtime import Runtime
 
+from Agent.Context.Process.Components.LedgerReducer import operation_data
 from Agent.Loop.Models import AgentRunState, RunDependencies
 
 
@@ -23,6 +24,17 @@ async def finish_run(
             "usage": state["usage"],
         },
     })
+    if state["ledger_operations"]:
+        runtime.stream_writer({
+            "type": "session_ledger_patch",
+            "payload": {
+                "base_version": state["ledger_base_version"],
+                "operations": [
+                    operation_data(operation)
+                    for operation in state["ledger_operations"]
+                ],
+            },
+        })
     runtime.stream_writer({
         "type": "run_finished",
         "payload": {

@@ -93,6 +93,7 @@ async def call_model(
         "model_step": model_step,
         "usage": _merge_usage(state["usage"], step_usage),
         "unread_result_ids": state["unread_result_ids"] - consumed,
+        "protocol_required_ids": state["protocol_required_ids"] - consumed,
     }
 
     finish_reason = _finish_reason(message)

@@ -25,6 +25,7 @@ from Agent.Context.Schemas.ContextUnit import (
     SourceKind,
     SourceRef,
 )
+from Agent.Context.Schemas.Ledger import SessionLedger
 from Agent.Interface.BackendClient import BackendClient
 from Agent.Loop.ContextNode import build_context
 from Agent.Loop.ModelNode import call_model
@@ -182,10 +183,7 @@ class AgentLoop:
             authority=Authority.USER,
             fidelity=Fidelity.EXACT,
         )
-        protected_ids = {
-            *(unit.id for unit in run.execution_units),
-            *run.protected_execution_ids,
-        }
+        protected_ids = set(run.protected_execution_ids)
         return AgentRunState(
             current_query=current_query,
             dialogue_turns=tuple(run.dialogue_turns),
@@ -196,7 +194,9 @@ class AgentLoop:
             protocol_required_ids=set(protected_ids),
             cached_memory=None,
             session_summary=run.session_summary,
-            session_ledger=run.session_ledger,
+            session_ledger=run.session_ledger or SessionLedger(),
+            ledger_base_version=(run.session_ledger.version if run.session_ledger else 0),
+            ledger_operations=[],
             history_cursor=run.history_cursor,
             context_revision=0,
             context_result=None,

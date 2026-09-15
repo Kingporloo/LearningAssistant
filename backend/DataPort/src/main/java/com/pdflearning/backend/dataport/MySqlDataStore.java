@@ -311,7 +311,7 @@ public final class MySqlDataStore {
         memoryIds.forEach(ignored -> placeholders.add("?"));
         var typeClause = "all".equals(memoryType) ? "" : " AND memory_type = ?";
         var sql = """
-                SELECT memory_id, memory_type, content, importance, status,
+                SELECT memory_id, memory_type, content, importance, status, revision,
                        source_session_id, source_message_id, created_at, event_time
                 FROM long_term_memory
                 WHERE user_id = ? AND status = 'active' AND memory_id IN (%s)%s
@@ -644,6 +644,7 @@ public final class MySqlDataStore {
                 result.getString("content"),
                 result.getDouble("importance"),
                 result.getString("status"),
+                result.getInt("revision"),
                 result.getString("source_session_id"),
                 result.getString("source_message_id"),
                 offsetDateTime(result.getTimestamp("created_at")),

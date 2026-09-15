@@ -63,7 +63,13 @@ def structure(
     selected_units = [
         unit for unit in _unique_units(selected) if unit.id not in mandatory_ids
     ]
-    selected_units = _remove_summary_covered(mandatory_units, selected_units)
+    covered = _summary_covered(mandatory_units)
+    mandatory_units = [
+        unit
+        for unit in mandatory_units
+        if unit.source_ref.kind is SourceKind.DERIVED or _source_key(unit) not in covered
+    ]
+    selected_units = [unit for unit in selected_units if _source_key(unit) not in covered]
 
     current_id = current_query.id
     mandatory_units = [unit for unit in mandatory_units if unit.id != current_id]
@@ -109,7 +115,10 @@ def structure(
     included_ids = list(dict.fromkeys(included_ids))
 
     if mode == "native":
-        native_execution = _native_execution(execution)
+        native_execution = _selected_native_execution(
+            _native_execution(execution),
+            tool_units,
+        )
         messages = _native_messages(
             system_prompt=system_prompt,
             mandatory_background=mandatory_background,
@@ -262,10 +271,7 @@ def _is_dialogue_message(unit: ContextUnit) -> bool:
     )
 
 
-def _remove_summary_covered(
-    mandatory: Sequence[ContextUnit],
-    selected: Sequence[ContextUnit],
-) -> list[ContextUnit]:
+def _summary_covered(mandatory: Sequence[ContextUnit]) -> set[tuple[str, str, int | None]]:
     covered: set[tuple[str, str, int | None]] = set()
     for unit in mandatory:
         if unit.source_ref.kind is not SourceKind.DERIVED:
@@ -278,17 +284,54 @@ def _remove_summary_covered(
                 ref.get("ref_id"), str
             ):
                 covered.add((ref["kind"], ref["ref_id"], ref.get("version")))
+    return covered
 
-    return [
-        unit
-        for unit in selected
-        if (
-            unit.source_ref.kind.value,
-            unit.source_ref.ref_id,
-            unit.source_ref.version,
-        )
-        not in covered
-    ]
+
+def _source_key(unit: ContextUnit) -> tuple[str, str, int | None]:
+    return (
+        unit.source_ref.kind.value,
+        unit.source_ref.ref_id,
+        unit.source_ref.version,
+    )
+
+
+def _selected_native_execution(
+    messages: Sequence[BaseMessage],
+    tool_units: Sequence[ContextUnit],
+) -> list[BaseMessage]:
+    selected_call_ids = {
+        str(unit.source_ref.metadata.get("tool_call_id") or unit.source_ref.ref_id)
+        for unit in tool_units
+    }
+    if not selected_call_ids:
+        return []
+
+    selected: list[BaseMessage] = []
+    group: list[BaseMessage] = []
+    for message in messages:
+        if isinstance(message, AIMessage) and group:
+            _append_selected_group(selected, group, selected_call_ids)
+            group = []
+        group.append(message)
+    if group:
+        _append_selected_group(selected, group, selected_call_ids)
+    return selected
+
+
+def _append_selected_group(
+    selected: list[BaseMessage],
+    group: list[BaseMessage],
+    selected_call_ids: set[str],
+) -> None:
+    first = group[0]
+    if not isinstance(first, AIMessage):
+        raise ValueError("execution 工具组必须以 AIMessage 开始")
+    call_ids = {str(call["id"]) for call in first.tool_calls}
+    overlap = call_ids & selected_call_ids
+    if overlap and not call_ids <= selected_call_ids:
+        raise ValueError("不能只选择历史工具调用组的一部分")
+    if call_ids and call_ids <= selected_call_ids:
+        selected.extend(group)
 
 
 def _unique_units(units: Sequence[ContextUnit]) -> list[ContextUnit]:

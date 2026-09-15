@@ -62,6 +62,47 @@ class ContextSummaryDataPortTest {
         assertEquals(1, operationCount());
     }
 
+    @Test
+    void invalidatesASummaryWhenReferencedMemoryChangesOrIsDeleted() throws Exception {
+        var dataPort = dataPort();
+        try (var connection = source.getConnection();
+                var statement = connection.createStatement()) {
+            statement.execute("""
+                    INSERT INTO long_term_memory
+                        (memory_id, user_id, status, revision)
+                    VALUES ('memory-1', 'dev_user', 'active', 1)
+                    """);
+        }
+        var refs = mapper.createArrayNode().add(mapper.createObjectNode()
+                .put("kind", "memory")
+                .put("ref_id", "memory-1")
+                .put("version", 1));
+        dataPort.store(new ContextSummaryDataPort.StoreCommand(
+                "dev_user", sessionId(), "compact-memory-1", "compact:memory-1",
+                0, "cursor-1", "assistant-5", refs, "包含记忆的摘要"));
+        assertEquals(true, dataPort.find("dev_user", sessionId()).orElseThrow().usable());
+
+        try (var connection = source.getConnection();
+                var statement = connection.createStatement()) {
+            statement.execute("""
+                    UPDATE long_term_memory SET revision = 2 WHERE memory_id = 'memory-1'
+                    """);
+        }
+        var corrected = dataPort.find("dev_user", sessionId()).orElseThrow();
+        assertEquals(false, corrected.usable());
+        assertEquals("memory_version_changed", corrected.invalidReason());
+
+        try (var connection = source.getConnection();
+                var statement = connection.createStatement()) {
+            statement.execute("""
+                    UPDATE long_term_memory SET status = 'deleted' WHERE memory_id = 'memory-1'
+                    """);
+        }
+        var deleted = dataPort.find("dev_user", sessionId()).orElseThrow();
+        assertEquals(false, deleted.usable());
+        assertEquals("memory_deleted", deleted.invalidReason());
+    }
+
     private ContextSummaryDataPort dataPort() throws SQLException {
         source = new JdbcDataSource();
         source.setURL("jdbc:h2:mem:" + System.nanoTime()
@@ -98,6 +139,13 @@ class ContextSummaryDataPortTest {
                         response_json CLOB NOT NULL,
                         PRIMARY KEY (user_id, request_id, operation_id)
                     )
+                    """);
+            statement.execute("""
+                    CREATE TABLE long_term_memory (
+                        memory_id VARCHAR(36) PRIMARY KEY,
+                        user_id VARCHAR(128) NOT NULL,
+                        status VARCHAR(16) NOT NULL,
+                        revision INT NOT NULL)
                     """);
             try (var insert = connection.prepareStatement("""
                     INSERT INTO agent_session (user_id, session_id) VALUES (?, ?)

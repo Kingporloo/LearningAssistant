@@ -296,6 +296,7 @@ public final class MemoryDataPort {
         result.put("content", memory.content());
         result.put("importance", memory.importance());
         result.put("status", memory.status());
+        result.put("version", memory.revision());
         result.put("score", score);
         result.put("created_at", memory.createdAt());
         if (memory.eventTime() != null) {

@@ -33,12 +33,18 @@ public final class AgentRunDataPort {
     }
 
     private final DataSource dataSource;
+    private final SessionLedgerDataPort ledgers;
 
     public AgentRunDataPort(DataSource dataSource) {
-        if (dataSource == null) {
-            throw new IllegalArgumentException("dataSource 不能为空");
+        this(dataSource, new SessionLedgerDataPort(dataSource));
+    }
+
+    AgentRunDataPort(DataSource dataSource, SessionLedgerDataPort ledgers) {
+        if (dataSource == null || ledgers == null) {
+            throw new IllegalArgumentException("AgentRunDataPort 依赖不能为空");
         }
         this.dataSource = dataSource;
+        this.ledgers = ledgers;
     }
 
     public RunClaim beginRun(
@@ -167,6 +173,11 @@ public final class AgentRunDataPort {
                         eventType,
                         eventHash,
                         eventJson);
+                if ("session_ledger_patch".equals(eventType)) {
+                    if (!ledgers.applyEvent(connection, userId, sessionId, eventJson)) {
+                        throw new IllegalStateException("Session Ledger 版本冲突");
+                    }
+                }
                 updateRunAfterEvent(
                         connection, userId, requestId, eventSeq, terminalStatus);
                 if (terminalStatus != null) {

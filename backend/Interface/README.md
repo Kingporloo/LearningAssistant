@@ -41,7 +41,7 @@
 
 用户路由直接复用 `backend/User` 的 `UserRequestHandler`，网关不复制注册、登录和
 密码逻辑。Agent 路由不接受正文中的 `user_id`。它从登录令牌取得用户身份，逐次检查会话归属，再把
-可信身份、近期问答和当前有效摘要组装为 `AgentRunRequest`。首条用户消息、正式会话
+可信身份、摘要覆盖位置后的问答、完整历史工具组和当前 Ledger 组装为 `AgentRunRequest`。首条用户消息、正式会话
 归属和 Agent 运行会话在同一 MySQL 事务中创建；尚无消息的会话不会产生数据库记录。
 `chat_session.session_id` 是全局主键，不能被另一用户重新绑定。
 
@@ -57,6 +57,8 @@
 | `POST /internal/storage/memory/graph/claim` | 领取一个待补全的语义图谱任务 |
 | `POST /internal/storage/memory/graph/complete` | 按记忆版本保存图谱任务结果 |
 | `POST /internal/storage/memory/graph/recover` | 服务启动时恢复中断任务 |
+| `POST /internal/storage/history/search` | 在当前会话和历史快照内搜索旧消息跨度 |
+| `POST /internal/storage/history/read` | 按消息与跨度引用回读原始正文 |
 | `POST /internal/storage/context/summary` | 会话摘要的版本化、幂等保存 |
 
 请求格式与 Python `Agent/Interface/BackendClient.py` 保持一致。每个请求必须同时
@@ -199,3 +201,9 @@ PYTHON_INTERNAL_TOKEN=<与 Python 服务相同的内部 token>
 字段由聊天与执行记录查询结果组装，内部结构已经由 Python 的网络契约固定；身份字段和
 ContextConfig 使用明确的 Java 字段。`AgentEventStream` 是阻塞式增量读取器，不会把
 完整回答缓存到内存后再返回。
+
+`AgentContextSnapshotFactory` 从完成的可见问答确定 `history_cursor`，按有效摘要的
+`through_message_id` 截取近期对话；它从原始 `tool_started/tool_finished/text_delta`
+事件恢复配对完整的工具组，并读取已持久化 Session Ledger。摘要引用的长期 Memory
+不存在或 revision 已变化时，快照保留摘要版本和失效原因，但回退到完整历史且不使用
+旧摘要正文。

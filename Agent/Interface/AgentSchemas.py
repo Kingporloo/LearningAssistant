@@ -131,6 +131,16 @@ class SessionSummarySnapshot(_RequestModel):
     text: NonEmptyString
     through_message_id: NonEmptyString | None = None
     source_refs: list[SourceRefSnapshot] = Field(default_factory=list)
+    usable: bool = True
+    invalid_reason: NonEmptyString | None = None
+
+    @model_validator(mode="after")
+    def validate_usability(self) -> "SessionSummarySnapshot":
+        if self.usable and self.invalid_reason is not None:
+            raise ValueError("可用摘要不能包含 invalid_reason")
+        if not self.usable and self.invalid_reason is None:
+            raise ValueError("不可用摘要必须包含 invalid_reason")
+        return self
 
     def to_session_summary(self) -> SessionSummary:
         return SessionSummary(
@@ -138,6 +148,8 @@ class SessionSummarySnapshot(_RequestModel):
             text=self.text,
             through_message_id=self.through_message_id,
             source_refs=[item.to_source_ref() for item in self.source_refs],
+            usable=self.usable,
+            invalid_reason=self.invalid_reason,
         )
 
 
@@ -450,6 +462,7 @@ def _execution_group(
                 session_id=context.session_id,
                 metadata={
                     "group_id": group.group_id,
+                    "tool_call_id": result.tool_call_id,
                     "tool_name": result.name,
                     "business_status": result.business_status,
                     "outcome": result.outcome,

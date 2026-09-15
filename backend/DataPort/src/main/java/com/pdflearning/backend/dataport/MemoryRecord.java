@@ -8,6 +8,7 @@ public record MemoryRecord(
         String content,
         double importance,
         String status,
+        int revision,
         String sourceSessionId,
         String sourceMessageId,
         OffsetDateTime createdAt,

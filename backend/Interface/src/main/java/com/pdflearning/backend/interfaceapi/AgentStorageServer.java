@@ -38,13 +38,16 @@ public final class AgentStorageServer implements AutoCloseable {
         this.resources = resources;
         this.internalToken = internalToken;
         this.requestHandler = new DataPortRequestHandler(
-                resources.memory(), resources.rag(), resources.contextSummaries());
+                resources.memory(), resources.rag(), resources.contextSummaries(),
+                resources.sessionArchive());
         this.mapper = objectMapper();
         register("/internal/storage/rag/search", DataPortRequestHandler.Operation.RAG_SEARCH);
         register("/internal/storage/rag/graph", DataPortRequestHandler.Operation.RAG_GRAPH);
         register("/internal/storage/memory/query", DataPortRequestHandler.Operation.MEMORY_QUERY);
         register("/internal/storage/memory/store", DataPortRequestHandler.Operation.MEMORY_STORE);
         register("/internal/storage/memory/forget", DataPortRequestHandler.Operation.MEMORY_FORGET);
+        register("/internal/storage/history/search", DataPortRequestHandler.Operation.HISTORY_SEARCH);
+        register("/internal/storage/history/read", DataPortRequestHandler.Operation.HISTORY_READ);
         registerWorker(
                 "/internal/storage/memory/graph/claim",
                 DataPortRequestHandler.WorkerOperation.MEMORY_GRAPH_CLAIM);

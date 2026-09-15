@@ -22,7 +22,9 @@ public final class ContextSummaryDataPort {
             String text,
             String throughMessageId,
             String historyCursor,
-            JsonNode sourceRefs) {
+            JsonNode sourceRefs,
+            boolean usable,
+            String invalidReason) {
     }
 
     public record StoreCommand(
@@ -70,11 +72,18 @@ public final class ContextSummaryDataPort {
                         """)) {
             statement.setString(1, userId);
             statement.setString(2, sessionId);
+            StoredSummary summary;
             try (var result = statement.executeQuery()) {
-                return result.next()
-                        ? Optional.of(storedSummary(result))
-                        : Optional.empty();
+                if (!result.next()) {
+                    return Optional.empty();
+                }
+                summary = storedSummary(result);
             }
+            String invalidReason = invalidSourceReason(connection, userId, summary.sourceRefs());
+            return Optional.of(new StoredSummary(
+                    summary.version(), summary.text(), summary.throughMessageId(),
+                    summary.historyCursor(), summary.sourceRefs(),
+                    invalidReason == null, invalidReason));
         } catch (SQLException exception) {
             throw new DataPortException("MySQL 读取会话摘要失败", exception);
         }
@@ -169,7 +178,9 @@ public final class ContextSummaryDataPort {
                     result.getString("text"),
                     result.getString("through_message_id"),
                     result.getString("history_cursor"),
-                    sourceRefs);
+                    sourceRefs,
+                    true,
+                    null);
         } catch (DataPortException exception) {
             throw exception;
         } catch (Exception exception) {
@@ -270,6 +281,8 @@ public final class ContextSummaryDataPort {
         summary.put("text", command.text());
         summary.put("through_message_id", command.throughMessageId());
         summary.put("source_refs", command.sourceRefs());
+        summary.put("usable", true);
+        summary.put("invalid_reason", null);
         var response = new LinkedHashMap<String, Object>();
         response.put("status", "saved");
         response.put("session_summary", summary);
@@ -329,6 +342,46 @@ public final class ContextSummaryDataPort {
         if (command.sourceRefs() == null || !command.sourceRefs().isArray()) {
             throw new IllegalArgumentException("source_refs 必须是数组");
         }
+    }
+
+    private static String invalidSourceReason(
+            Connection connection,
+            String userId,
+            JsonNode sourceRefs) throws SQLException {
+        for (var ref : sourceRefs) {
+            if (!ref.path("exists").asBoolean(true)) {
+                return "summary_source_missing";
+            }
+            String kind = ref.path("kind").asText("");
+            if ("working_state".equals(kind)) {
+                return "working_memory_expired";
+            }
+            if (!"memory".equals(kind)) {
+                continue;
+            }
+            String memoryId = ref.path("ref_id").asText("");
+            JsonNode version = ref.get("version");
+            if (memoryId.isBlank() || version == null || !version.canConvertToInt()) {
+                return "memory_version_unavailable";
+            }
+            try (var statement = connection.prepareStatement("""
+                    SELECT revision
+                    FROM long_term_memory
+                    WHERE user_id = ? AND memory_id = ? AND status = 'active'
+                    """)) {
+                statement.setString(1, userId);
+                statement.setString(2, memoryId);
+                try (var result = statement.executeQuery()) {
+                    if (!result.next()) {
+                        return "memory_deleted";
+                    }
+                    if (result.getInt("revision") != version.intValue()) {
+                        return "memory_version_changed";
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     private static void requireText(String value, String name) {
