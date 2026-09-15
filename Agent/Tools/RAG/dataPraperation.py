@@ -11,11 +11,14 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from langchain_core.documents import Document
-from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
+from Agent.Tools.RAG.Components.AdaptiveChunker import adaptive_chunks
+from Agent.Tools.RAG.Components.DocumentIR import (
+    DocumentBlock,
+    DocumentSection,
+    build_document_ir,
+)
 
-PAGE_MARK_RE = re.compile(r"<!--\s*第\s*(\d+)\s*页\s*-->")
-HEADER_SPLIT_ON = [("#", "h1"), ("##", "h2"), ("###", "h3")]
+PAGE_MARK_RE = re.compile(r"<!--\s*第\s*(\d+)\s*页(?:（[^>]*）)?\s*-->")
 DEFAULT_EMBED_MODEL = "jinaai/jina-embeddings-v2-base-zh"
 # 4GB 显存（RTX 3050 Laptop）下 2048 Token 长序列的安全批量，避免注意力矩阵 OOM。
 EMBED_BATCH_SIZE = 4
@@ -33,9 +36,15 @@ class PreparedChunk:
     source: str
     file_type: str
     page: int | None = None
+    page_end: int | None = None
     h1: str | None = None
     h2: str | None = None
     h3: str | None = None
+    section_id: str | None = None
+    heading_path: tuple[str, ...] = ()
+    block_ids: tuple[str, ...] = ()
+    block_types: tuple[str, ...] = ()
+    token_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {key: value for key, value in asdict(self).items() if value is not None}
@@ -118,7 +127,8 @@ def resolve_file_reference(file_ref: str, allowed_root: str | Path) -> Path:
 def load_file(path: Path, source_name: str | None = None) -> list[tuple[dict[str, Any], str]]:
     """读取已转换的 Markdown，不再解析原始 PDF 或其他文件格式。"""
     source = source_name or path.name
-    base = {"source": source, "file_type": "md"}
+    source_type = Path(source).suffix.lower().lstrip(".") or "md"
+    base = {"source": source, "file_type": source_type}
     text = path.read_text(encoding="utf-8")
     return [
         ({**base, **({"page": page} if page is not None else {})}, content)
@@ -147,10 +157,13 @@ def chunk_segments(
     chunk_overlap: int = 256,
     embeddings: EmbeddingModel | None = None,
 ) -> list[PreparedChunk]:
-    """按 Token 分块；chunk_size 含特殊 Token，chunk_overlap 只计正文 Token。"""
+    """通过 Document IR 按结构合并，仅在单块超长时保留局部 overlap。"""
     if not document_id.strip():
         raise ValueError("document_id 不能为空")
     if not any(text.strip() for _, text in segments):
+        return []
+    document = build_document_ir(segments, document_id=document_id)
+    if not any(section.blocks for section in document.sections):
         return []
     embeddings = embeddings or EmbeddingModel()
     max_tokens = min(chunk_size, embeddings.max_tokens)
@@ -159,44 +172,40 @@ def chunk_segments(
         raise ValueError("分块 Token 上限必须大于模型所需的特殊 Token 数量")
     if not 0 <= chunk_overlap < token_limit:
         raise ValueError(f"chunk_overlap 必须在 0 到 {token_limit - 1} Token 之间")
-    token_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=token_limit,
-        chunk_overlap=chunk_overlap,
-        length_function=lambda text: embeddings.count_tokens(text, add_special_tokens=False),
-        separators=["\n\n", "\n", "。", "！", "？", "；", " ", ""],
-    )
-    markdown = MarkdownHeaderTextSplitter(
-        headers_to_split_on=HEADER_SPLIT_ON,
-        strip_headers=False,
-    )
-    parts: list[tuple[dict[str, Any], Document]] = []
-    for metadata, text in segments:
-        if not text.strip():
-            continue
-        documents = markdown.split_text(text)
-        parts.extend((metadata, item) for item in token_splitter.split_documents(documents))
+    drafts: list[tuple[DocumentSection, list[DocumentBlock], str]] = []
+    for section in document.sections:
+        for blocks, text in adaptive_chunks(
+            section,
+            token_limit=token_limit,
+            chunk_overlap=chunk_overlap,
+            embeddings=embeddings,
+        ):
+            drafts.append((section, blocks, text))
 
     chunks: list[PreparedChunk] = []
-    for base, part in parts:
-        text = part.page_content.strip()
-        if not text:
-            continue
+    for section, blocks, text in drafts:
         if embeddings.count_tokens(text) > max_tokens:
             raise ValueError(f"分块超过 {max_tokens} Token 上限，无法完整向量化")
-        metadata = {**base, **part.metadata}
         chunk_index = len(chunks)
+        pages = [page for block in blocks for page in (block.page_start, block.page_end) if page is not None]
         chunks.append(
             PreparedChunk(
                 chunk_id=f"{document_id}:{chunk_index:06d}",
                 document_id=document_id,
                 chunk_index=chunk_index,
                 text=text,
-                source=str(metadata["source"]),
-                file_type=str(metadata["file_type"]),
-                page=_optional_int(metadata.get("page")),
-                h1=_optional_text(metadata.get("h1")),
-                h2=_optional_text(metadata.get("h2")),
-                h3=_optional_text(metadata.get("h3")),
+                source=document.source,
+                file_type=document.file_type,
+                page=min(pages) if pages else None,
+                page_end=max(pages) if pages else None,
+                h1=section.headings[0],
+                h2=section.headings[1],
+                h3=section.headings[2],
+                section_id=section.section_id,
+                heading_path=section.heading_path,
+                block_ids=tuple(block.block_id for block in blocks),
+                block_types=tuple(dict.fromkeys(block.block_type for block in blocks)),
+                token_count=embeddings.count_tokens(text),
             )
         )
     return chunks
@@ -227,12 +236,3 @@ def prepare_document(
     if len(vectors) != len(chunks):
         raise RuntimeError("嵌入模型返回的向量数量与分块数量不一致")
     return [{**chunk.to_dict(), "vector": vector} for chunk, vector in zip(chunks, vectors)]
-
-
-def _optional_text(value: Any) -> str | None:
-    text = str(value).strip() if value is not None else ""
-    return text or None
-
-
-def _optional_int(value: Any) -> int | None:
-    return int(value) if value is not None else None

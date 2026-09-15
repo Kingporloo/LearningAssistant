@@ -109,10 +109,24 @@ final class AgentGatewayHandler {
         }
 
         String[] parts = path.split("/");
-        if (parts.length == 3 && "documents".equals(parts[1]) && "DELETE".equals(method)) {
-            documents.delete(userId, requiredPublicPathId(parts[2], "document_id"));
-            http.send(exchange, 204, null);
-            return;
+        if (parts.length >= 3 && "documents".equals(parts[1])) {
+            String documentId = requiredPublicPathId(parts[2], "document_id");
+            if (parts.length == 3 && "DELETE".equals(method)) {
+                documents.delete(userId, documentId);
+                http.send(exchange, 204, null);
+                return;
+            }
+            if (parts.length == 3 && "PUT".equals(method)) {
+                handleDocumentReplacement(exchange, userId, documentId);
+                return;
+            }
+            if (parts.length == 4
+                    && "rebuild".equals(parts[3])
+                    && "POST".equals(method)) {
+                http.send(exchange, 202, documents.rebuild(userId, documentId));
+                return;
+            }
+            throw new AgentGatewayException(404, "接口不存在");
         }
         if (parts.length < 3 || !"sessions".equals(parts[1])) {
             throw new AgentGatewayException(404, "接口不存在");
@@ -150,6 +164,16 @@ final class AgentGatewayHandler {
         http.ensureContentLength(exchange, MAX_UPLOAD_BYTES);
         byte[] content = http.readBody(exchange, MAX_UPLOAD_BYTES);
         http.send(exchange, 202, documents.upload(userId, fileName, content));
+    }
+
+    private void handleDocumentReplacement(
+            HttpExchange exchange,
+            String userId,
+            String documentId) {
+        String fileName = queryParameter(exchange, "filename");
+        http.ensureContentLength(exchange, MAX_UPLOAD_BYTES);
+        byte[] content = http.readBody(exchange, MAX_UPLOAD_BYTES);
+        http.send(exchange, 202, documents.replace(userId, documentId, fileName, content));
     }
 
     private void handleUserRequest(HttpExchange exchange, String path) {

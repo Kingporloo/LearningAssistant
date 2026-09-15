@@ -8,6 +8,7 @@ import type {
   AuthResult,
   ChangePasswordRequest,
   ChatMessage,
+  CompactResult,
   DocumentItem,
   LoginRequest,
   RegisterRequest,
@@ -55,6 +56,7 @@ export interface ApiClient {
   createSession(title?: string): Promise<SessionInfo>
   deleteSession(sessionId: string): Promise<void>
   listMessages(sessionId: string): Promise<ChatMessage[]>
+  compactSession(sessionId: string): Promise<CompactResult>
 
   // ---- 聊天 ----
   runChat(params: ChatRunParams): ChatRunHandle
@@ -62,6 +64,8 @@ export interface ApiClient {
   // ---- 文档 ----
   listDocuments(): Promise<DocumentItem[]>
   uploadDocument(file: File): Promise<DocumentItem>
+  replaceDocument(documentId: string, file: File): Promise<DocumentItem>
+  rebuildDocument(documentId: string): Promise<DocumentItem>
   deleteDocument(documentId: string): Promise<void>
 }
 

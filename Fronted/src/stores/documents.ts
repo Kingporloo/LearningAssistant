@@ -9,6 +9,8 @@ interface DocumentsState {
   uploadError: string | null
   load: (force?: boolean) => Promise<void>
   upload: (file: File) => Promise<void>
+  replace: (documentId: string, file: File) => Promise<void>
+  rebuild: (documentId: string) => Promise<void>
   remove: (documentId: string) => Promise<void>
 }
 
@@ -63,6 +65,26 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     } finally {
       set({ uploading: false })
     }
+  },
+
+  async replace(documentId, file) {
+    const document = await api.replaceDocument(documentId, file)
+    set({
+      docs: get().docs.map((item) =>
+        item.id === documentId ? document : item,
+      ),
+    })
+    schedulePoll(get)
+  },
+
+  async rebuild(documentId) {
+    const document = await api.rebuildDocument(documentId)
+    set({
+      docs: get().docs.map((item) =>
+        item.id === documentId ? document : item,
+      ),
+    })
+    schedulePoll(get)
   },
 
   async remove(documentId) {

@@ -1,6 +1,5 @@
 /**
- * 真实服务客户端。联调时在 .env 设 VITE_USE_MOCK=false，并通过
- * VITE_API_BASE_URL 配置 Java 统一网关。
+ * 真实服务客户端。默认启用，通过 VITE_API_BASE_URL 配置 Java 统一网关。
  *
  * 约定（对齐后端设计）：
  * - 认证：Authorization: Bearer <token>
@@ -12,6 +11,7 @@ import type {
   AuthResult,
   ChangePasswordRequest,
   ChatMessage,
+  CompactResult,
   DocumentItem,
   LoginRequest,
   RegisterRequest,
@@ -53,6 +53,33 @@ async function request<T>(
   }
   if (response.status === 204) return undefined as T
   return (await response.json()) as T
+}
+
+async function sendDocument(
+  path: string,
+  method: 'POST' | 'PUT',
+  file: File,
+): Promise<DocumentItem> {
+  const token = getToken()
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: file,
+  })
+  if (!response.ok) {
+    let message = `上传失败（${response.status}）`
+    try {
+      const body = (await response.json()) as { message?: string }
+      if (body.message) message = body.message
+    } catch {
+      // 保留默认
+    }
+    throw new ApiRequestError(response.status, message)
+  }
+  return (await response.json()) as DocumentItem
 }
 
 /** 解析 text/event-stream 为事件回调 */
@@ -163,6 +190,13 @@ export function createRealApiClient(): ApiClient {
       return request(`/sessions/${sessionId}/messages`)
     },
 
+    async compactSession(sessionId: string): Promise<CompactResult> {
+      return request(`/sessions/${encodeURIComponent(sessionId)}/compact`, {
+        method: 'POST',
+        body: '{}',
+      })
+    },
+
     runChat(params: ChatRunParams): ChatRunHandle {
       const { sessionId, requestId, messageId, message, onEvent, signal } = params
       const controller = new AbortController()
@@ -229,27 +263,24 @@ export function createRealApiClient(): ApiClient {
     },
 
     async uploadDocument(file: File): Promise<DocumentItem> {
-      const token = getToken()
       const fileName = encodeURIComponent(file.name)
-      const response = await fetch(`${API_BASE_URL}/documents?filename=${fileName}`, {
+      return sendDocument(`/documents?filename=${fileName}`, 'POST', file)
+    },
+
+    async replaceDocument(documentId: string, file: File): Promise<DocumentItem> {
+      const fileName = encodeURIComponent(file.name)
+      return sendDocument(
+        `/documents/${encodeURIComponent(documentId)}?filename=${fileName}`,
+        'PUT',
+        file,
+      )
+    },
+
+    async rebuildDocument(documentId: string): Promise<DocumentItem> {
+      return request(`/documents/${encodeURIComponent(documentId)}/rebuild`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/octet-stream',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: file,
+        body: '{}',
       })
-      if (!response.ok) {
-        let message = `上传失败（${response.status}）`
-        try {
-          const body = (await response.json()) as { message?: string }
-          if (body.message) message = body.message
-        } catch {
-          // 保留默认
-        }
-        throw new ApiRequestError(response.status, message)
-      }
-      return (await response.json()) as DocumentItem
     },
 
     async deleteDocument(documentId: string): Promise<void> {

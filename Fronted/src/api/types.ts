@@ -50,6 +50,19 @@ export interface SessionInfo {
   messageCount: number
 }
 
+export interface CompactResult {
+  status: 'saved' | 'skipped' | 'failed' | 'unknown'
+  trigger: 'manual'
+  reason: string | null
+  beforeTokens: number
+  afterTokens: number
+  compactTriggerTokens: number
+  belowTrigger: boolean
+  summarySaveStatus: string
+  sessionSummary: unknown | null
+  compact: unknown | null
+}
+
 // ============ 消息与运行时间线 ============
 
 export type ToolCallStatus = 'running' | 'completed' | 'error' | 'skipped'
@@ -114,6 +127,7 @@ export type ChatMessage = UserMessage | AssistantMessage
 export type AgentEventType =
   | 'run_started'
   | 'model_step_started'
+  | 'model_step_retrying'
   | 'text_delta'
   | 'model_step_finished'
   | 'tool_started'
@@ -140,6 +154,13 @@ export interface ModelStepStartedPayload {
   tools_enabled: boolean
 }
 
+export interface ModelStepRetryingPayload {
+  model_step: number
+  attempt: 2
+  reason: 'empty_model_response'
+  usage: TokenUsage
+}
+
 export interface TextDeltaPayload {
   model_step: number
   delta: string
@@ -150,6 +171,7 @@ export interface ModelStepFinishedPayload {
   outcome: string
   consumed_result_ids: string[]
   usage: TokenUsage
+  attempts?: number
 }
 
 export interface ToolStartedPayload {

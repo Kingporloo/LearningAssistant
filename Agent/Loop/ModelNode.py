@@ -45,48 +45,80 @@ async def call_model(
         },
     })
 
-    combined: AIMessageChunk | None = None
-    try:
-        async for chunk in runtime.context.assistant.astream(context_result.request):
-            combined = chunk if combined is None else combined + chunk
-            delta = chunk.text()
-            if delta:
-                runtime.stream_writer({
-                    "type": "text_delta",
-                    "payload": {"model_step": model_step, "delta": delta},
-                })
-    except Exception as exc:
-        return {
-            "model_step": model_step,
-            **_failure(
-                code="model_call_failed",
-                message=str(exc),
-                retryable=True,
-            ),
-        }
+    attempt = 1
+    previous_attempt_usage: dict[str, int] = {}
+    while True:
+        combined: AIMessageChunk | None = None
+        try:
+            async for chunk in runtime.context.assistant.astream(
+                context_result.request
+            ):
+                combined = chunk if combined is None else combined + chunk
+                delta = chunk.text()
+                if delta:
+                    runtime.stream_writer({
+                        "type": "text_delta",
+                        "payload": {"model_step": model_step, "delta": delta},
+                    })
+        except Exception as exc:
+            result: dict[str, Any] = {"model_step": model_step}
+            if previous_attempt_usage:
+                result["usage"] = _merge_usage(
+                    state["usage"], previous_attempt_usage
+                )
+            return {
+                **result,
+                **_failure(
+                    code="model_call_failed",
+                    message=str(exc),
+                    retryable=True,
+                ),
+            }
 
-    if combined is None:
-        return {
-            "model_step": model_step,
-            **_failure(
-                code="empty_model_stream",
-                message="模型流没有返回任何消息块",
-                retryable=True,
-            ),
-        }
+        if combined is None:
+            result = {"model_step": model_step}
+            if previous_attempt_usage:
+                result["usage"] = _merge_usage(
+                    state["usage"], previous_attempt_usage
+                )
+            return {
+                **result,
+                **_failure(
+                    code="empty_model_stream",
+                    message="模型流没有返回任何消息块",
+                    retryable=True,
+                ),
+            }
 
-    message = message_chunk_to_message(combined)
-    if not isinstance(message, AIMessage):
-        return {
-            "model_step": model_step,
-            **_failure(
-                code="invalid_model_message",
-                message="模型流没有合并为 AIMessage",
-                retryable=False,
-            ),
-        }
+        message = message_chunk_to_message(combined)
+        if not isinstance(message, AIMessage):
+            return {
+                "model_step": model_step,
+                **_failure(
+                    code="invalid_model_message",
+                    message="模型流没有合并为 AIMessage",
+                    retryable=False,
+                ),
+            }
 
-    step_usage = _usage(message)
+        current_attempt_usage = _usage(message)
+        step_usage = _merge_usage(previous_attempt_usage, current_attempt_usage)
+        finish_reason = _finish_reason(message)
+        if attempt == 1 and _is_retryable_empty_response(message, finish_reason):
+            runtime.stream_writer({
+                "type": "model_step_retrying",
+                "payload": {
+                    "model_step": model_step,
+                    "attempt": 2,
+                    "reason": "empty_model_response",
+                    "usage": current_attempt_usage,
+                },
+            })
+            previous_attempt_usage = step_usage
+            attempt = 2
+            continue
+        break
+
     consumed = set(state["request_consumed_result_ids"])
     common: dict[str, Any] = {
         "assistant_message": message,
@@ -96,9 +128,10 @@ async def call_model(
         "protocol_required_ids": state["protocol_required_ids"] - consumed,
     }
 
-    finish_reason = _finish_reason(message)
     if finish_reason in _TRUNCATED_FINISH_REASONS:
-        _write_finished(runtime, model_step, "truncated", consumed, step_usage)
+        _write_finished(
+            runtime, model_step, "truncated", consumed, step_usage, attempt
+        )
         return {
             **common,
             **_failure(
@@ -109,7 +142,9 @@ async def call_model(
         }
 
     if message.invalid_tool_calls:
-        _write_finished(runtime, model_step, "invalid_tool_call", consumed, step_usage)
+        _write_finished(
+            runtime, model_step, "invalid_tool_call", consumed, step_usage, attempt
+        )
         return {
             **common,
             **_failure(
@@ -121,7 +156,9 @@ async def call_model(
 
     call_error = _tool_call_error(message, state["execution"])
     if call_error is not None:
-        _write_finished(runtime, model_step, "invalid_tool_call", consumed, step_usage)
+        _write_finished(
+            runtime, model_step, "invalid_tool_call", consumed, step_usage, attempt
+        )
         return {
             **common,
             **_failure(
@@ -139,6 +176,7 @@ async def call_model(
                 "tool_call_after_disabled",
                 consumed,
                 step_usage,
+                attempt,
             )
             return {
                 **common,
@@ -149,7 +187,9 @@ async def call_model(
                 ),
             }
 
-        _write_finished(runtime, model_step, "tool_request", consumed, step_usage)
+        _write_finished(
+            runtime, model_step, "tool_request", consumed, step_usage, attempt
+        )
         next_action = (
             "reject_tool_calls"
             if state["tool_rounds"] >= runtime.context.max_tool_rounds
@@ -159,7 +199,9 @@ async def call_model(
 
     answer = message.text()
     if not answer.strip():
-        _write_finished(runtime, model_step, "empty_response", consumed, step_usage)
+        _write_finished(
+            runtime, model_step, "empty_response", consumed, step_usage, attempt
+        )
         return {
             **common,
             **_failure(
@@ -169,7 +211,9 @@ async def call_model(
             ),
         }
 
-    _write_finished(runtime, model_step, "final_answer", consumed, step_usage)
+    _write_finished(
+        runtime, model_step, "final_answer", consumed, step_usage, attempt
+    )
     return {
         **common,
         "final_answer": answer,
@@ -183,6 +227,7 @@ def _write_finished(
     outcome: str,
     consumed: set[str],
     usage: dict[str, int],
+    attempts: int,
 ) -> None:
     runtime.stream_writer({
         "type": "model_step_finished",
@@ -191,8 +236,21 @@ def _write_finished(
             "outcome": outcome,
             "consumed_result_ids": sorted(consumed),
             "usage": usage,
+            "attempts": attempts,
         },
     })
+
+
+def _is_retryable_empty_response(
+    message: AIMessage,
+    finish_reason: str | None,
+) -> bool:
+    return (
+        not message.text().strip()
+        and not message.tool_calls
+        and not message.invalid_tool_calls
+        and finish_reason in {None, "stop"}
+    )
 
 
 def _tool_call_error(

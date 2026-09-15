@@ -7,6 +7,7 @@ import {
   IconBook,
   IconCheck,
   IconFile,
+  IconRefresh,
   IconSpinner,
   IconTrash,
   IconUpload,
@@ -44,7 +45,13 @@ function StatusBadge({ status }: { status: DocumentItem['status'] }) {
 
 function DocumentCard({ doc }: { doc: DocumentItem }) {
   const remove = useDocumentsStore((s) => s.remove)
+  const replace = useDocumentsStore((s) => s.replace)
+  const rebuild = useDocumentsStore((s) => s.rebuild)
   const [confirming, setConfirming] = useState(false)
+  const [working, setWorking] = useState(false)
+  const [actionError, setActionError] = useState('')
+  const replacementRef = useRef<HTMLInputElement>(null)
+  const busy = doc.status === 'converting' || doc.status === 'building'
 
   const handleDelete = async () => {
     if (!confirming) {
@@ -53,6 +60,31 @@ function DocumentCard({ doc }: { doc: DocumentItem }) {
       return
     }
     await remove(doc.id)
+  }
+
+  const handleReplacement = async (file: File | undefined) => {
+    if (!file) return
+    setWorking(true)
+    setActionError('')
+    try {
+      await replace(doc.id, file)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '替换文件失败')
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const handleRebuild = async () => {
+    setWorking(true)
+    setActionError('')
+    try {
+      await rebuild(doc.id)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '重新构建失败')
+    } finally {
+      setWorking(false)
+    }
   }
 
   return (
@@ -78,7 +110,46 @@ function DocumentCard({ doc }: { doc: DocumentItem }) {
         {doc.status === 'failed' && doc.error && (
           <p className="mt-1 text-xs text-rose-500">{doc.error}</p>
         )}
+        {actionError && (
+          <p className="mt-1 text-xs text-rose-500">{actionError}</p>
+        )}
       </div>
+      <input
+        ref={replacementRef}
+        type="file"
+        accept=".pdf,.md,.txt"
+        className="hidden"
+        onChange={(event) => {
+          void handleReplacement(event.target.files?.[0])
+          event.target.value = ''
+        }}
+      />
+      {!busy && (
+        <>
+          <button
+            type="button"
+            onClick={() => replacementRef.current?.click()}
+            disabled={working}
+            className="shrink-0 rounded-lg p-2 text-slate-400 transition-colors hover:bg-brand-50 hover:text-brand-600 disabled:cursor-not-allowed disabled:opacity-40"
+            title="替换文件并沿用当前文档 ID"
+          >
+            <IconUpload className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleRebuild()}
+            disabled={working}
+            className="shrink-0 rounded-lg p-2 text-slate-400 transition-colors hover:bg-brand-50 hover:text-brand-600 disabled:cursor-not-allowed disabled:opacity-40"
+            title={doc.status === 'failed' ? '重试构建' : '重新构建索引'}
+          >
+            {working ? (
+              <IconSpinner className="h-4 w-4" />
+            ) : (
+              <IconRefresh className="h-4 w-4" />
+            )}
+          </button>
+        </>
+      )}
       <button
         type="button"
         onClick={handleDelete}

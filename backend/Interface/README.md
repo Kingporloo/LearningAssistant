@@ -27,6 +27,8 @@
 | `POST /sessions/{session_id}/compact` | 使用 Java 组装的可信历史执行手动 Compact |
 | `GET /documents` | 读取当前用户上传的知识库文档及构建状态 |
 | `POST /documents?filename=教材.pdf` | 上传原始文件并异步启动转换和 RAG 构建；正文为原始文件字节 |
+| `PUT /documents/{document_id}?filename=新教材.pdf` | 替换受控原文件，沿用文档 ID 并重新构建 |
+| `POST /documents/{document_id}/rebuild` | 使用已保存原文件重建索引，也用于失败任务重试 |
 | `DELETE /documents/{document_id}` | 删除当前用户的文档、索引和受控文件 |
 
 运行请求正文固定为：

@@ -97,6 +97,15 @@ export const IconUpload = (p: IconProps) => (
   </svg>
 )
 
+export const IconRefresh = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M20 6v6h-6" />
+    <path d="M4 18v-6h6" />
+    <path d="M18.5 9a7 7 0 0 0-12-2L4 12" />
+    <path d="M5.5 15a7 7 0 0 0 12 2l2.5-5" />
+  </svg>
+)
+
 export const IconCheck = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M20 6L9 17l-5-5" />

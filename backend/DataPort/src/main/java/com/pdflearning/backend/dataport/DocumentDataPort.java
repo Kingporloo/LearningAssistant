@@ -101,6 +101,49 @@ public final class DocumentDataPort {
                 .isPresent();
     }
 
+    public boolean startReplacement(DocumentData document) {
+        try (var connection = dataSource.getConnection();
+                var statement = connection.prepareStatement("""
+                        UPDATE rag_document
+                        SET file_name = ?, file_size = ?, source_path = ?, markdown_path = ?,
+                            build_request_id = ?, status = 'converting', status_message = NULL,
+                            chunk_count = NULL, page_count = NULL, ready_at = NULL,
+                            updated_at = CURRENT_TIMESTAMP(6)
+                        WHERE user_id = ? AND document_id = ?
+                          AND status NOT IN ('converting', 'building', 'deleted')
+                        """)) {
+            statement.setString(1, document.fileName());
+            statement.setLong(2, document.fileSize());
+            statement.setString(3, document.sourcePath());
+            statement.setString(4, document.markdownPath());
+            statement.setString(5, document.requestId());
+            statement.setString(6, document.userId());
+            statement.setString(7, document.documentId());
+            return statement.executeUpdate() == 1;
+        } catch (SQLException exception) {
+            throw new DataPortException("MySQL 更新 RAG 文档源文件失败", exception);
+        }
+    }
+
+    public boolean restartBuild(String userId, String documentId, String requestId) {
+        try (var connection = dataSource.getConnection();
+                var statement = connection.prepareStatement("""
+                        UPDATE rag_document
+                        SET build_request_id = ?, status = 'converting', status_message = NULL,
+                            chunk_count = NULL, page_count = NULL, ready_at = NULL,
+                            updated_at = CURRENT_TIMESTAMP(6)
+                        WHERE user_id = ? AND document_id = ?
+                          AND status NOT IN ('converting', 'building', 'deleted')
+                        """)) {
+            statement.setString(1, requestId);
+            statement.setString(2, userId);
+            statement.setString(3, documentId);
+            return statement.executeUpdate() == 1;
+        } catch (SQLException exception) {
+            throw new DataPortException("MySQL 重新启动 RAG 文档构建失败", exception);
+        }
+    }
+
     public void complete(
             String userId,
             String documentId,

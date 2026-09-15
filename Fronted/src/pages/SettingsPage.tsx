@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { isMockApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { IconCheck, IconSettings, IconSparkles, IconUser } from '@/components/Icons'
 
@@ -169,7 +170,14 @@ function PasswordSection() {
 
 function AboutSection() {
   return (
-    <SectionCard title="关于系统" description="当前前端运行于 Mock 模式，后端网关接入后自动切换">
+    <SectionCard
+      title="关于系统"
+      description={
+        isMockApi
+          ? '当前前端运行于显式启用的 Mock 演示模式'
+          : '当前前端连接 Java 统一网关'
+      }
+    >
       <ul className="space-y-2.5 text-sm text-slate-600">
         <li className="flex items-start gap-2.5">
           <IconSparkles className="mt-0.5 h-4 w-4 shrink-0 text-brand-500" />

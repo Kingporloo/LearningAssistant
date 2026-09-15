@@ -1,8 +1,8 @@
 /**
- * API 入口：默认使用 Mock，网关就绪后通过环境变量切换。
+ * API 入口：默认连接真实网关，仅在显式配置时使用 Mock。
  *
  * .env.local:
- *   VITE_USE_MOCK=false
+ *   VITE_USE_MOCK=true
  *   VITE_API_BASE_URL=/api
  */
 
@@ -10,7 +10,9 @@ import type { ApiClient } from './client'
 import { createMockApiClient } from './mock'
 import { createRealApiClient } from './real'
 
-const useMock = import.meta.env.VITE_USE_MOCK !== 'false'
+const useMock = import.meta.env.VITE_USE_MOCK === 'true'
+
+export const isMockApi = useMock
 
 export const api: ApiClient = useMock
   ? createMockApiClient()

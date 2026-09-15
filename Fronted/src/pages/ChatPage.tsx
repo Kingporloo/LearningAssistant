@@ -1,8 +1,9 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { api } from '@/api'
 import { ChatInput } from '@/components/chat/ChatInput'
 import { MessageList } from '@/components/chat/MessageList'
-import { IconBook, IconBrain, IconSparkles } from '@/components/Icons'
+import { IconBook, IconBrain, IconRefresh, IconSparkles } from '@/components/Icons'
 import { useChatStore } from '@/stores/chat'
 import { useDocumentsStore } from '@/stores/documents'
 import { useSessionsStore } from '@/stores/sessions'
@@ -78,6 +79,11 @@ export default function ChatPage() {
   const createSession = useSessionsStore((s) => s.create)
   const loadSessions = useSessionsStore((s) => s.load)
   const loadDocuments = useDocumentsStore((s) => s.load)
+  const [compactFeedback, setCompactFeedback] = useState<{
+    sessionId: string | null
+    state: 'idle' | 'running' | 'saved' | 'skipped' | 'failed'
+    message: string
+  }>({ sessionId: null, state: 'idle', message: '' })
 
   useEffect(() => {
     void loadDocuments()
@@ -103,9 +109,71 @@ export default function ChatPage() {
 
   const list = sessionId ? messages ?? [] : []
   const streaming = streamingSessionId === sessionId && streamingSessionId !== null
+  const compactState =
+    compactFeedback.sessionId === sessionId ? compactFeedback.state : 'idle'
+  const compactMessage =
+    compactFeedback.sessionId === sessionId ? compactFeedback.message : ''
+
+  const handleCompact = async () => {
+    if (!sessionId) return
+    setCompactFeedback({ sessionId, state: 'running', message: '' })
+    try {
+      const result = await api.compactSession(sessionId)
+      if (result.status === 'saved') {
+        setCompactFeedback({
+          sessionId,
+          state: 'saved',
+          message: `上下文已从 ${result.beforeTokens} 压缩到 ${result.afterTokens} token`,
+        })
+      } else if (result.status === 'skipped') {
+        setCompactFeedback({
+          sessionId,
+          state: 'skipped',
+          message: result.reason ?? '当前没有可压缩的旧上下文',
+        })
+      } else {
+        setCompactFeedback({
+          sessionId,
+          state: 'failed',
+          message: result.reason ?? '上下文压缩未完成',
+        })
+      }
+    } catch (error) {
+      setCompactFeedback({
+        sessionId,
+        state: 'failed',
+        message: error instanceof Error ? error.message : '上下文压缩失败',
+      })
+    }
+  }
 
   return (
     <div className="flex h-full flex-col">
+      {sessionId && list.length > 0 && (
+        <div className="flex items-center justify-end gap-3 border-b border-slate-100 px-4 py-2">
+          {compactMessage && (
+            <span
+              className={`text-xs ${
+                compactState === 'failed' ? 'text-rose-500' : 'text-slate-500'
+              }`}
+            >
+              {compactMessage}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => void handleCompact()}
+            disabled={streaming || compactState === 'running'}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
+            title="将较早的会话内容整理为摘要"
+          >
+            <IconRefresh
+              className={`h-3.5 w-3.5 ${compactState === 'running' ? 'animate-spin' : ''}`}
+            />
+            {compactState === 'running' ? '压缩中…' : '压缩上下文'}
+          </button>
+        </div>
+      )}
       {list.length === 0 ? (
         <Welcome onPick={(prompt) => void handleSend(prompt)} />
       ) : (

@@ -7,6 +7,7 @@ import type {
   AuthResult,
   ChangePasswordRequest,
   ChatMessage,
+  CompactResult,
   DocumentItem,
   LoginRequest,
   RegisterRequest,
@@ -156,6 +157,25 @@ export function createMockApiClient(): ApiClient {
     async listMessages(sessionId: string): Promise<ChatMessage[]> {
       const userId = requireUserId()
       return db.listMessages(userId, sessionId)
+    },
+
+    async compactSession(sessionId: string): Promise<CompactResult> {
+      const userId = requireUserId()
+      if (!db.listSessions(userId).some((session) => session.id === sessionId)) {
+        throw new RequestError(404, '会话不存在')
+      }
+      return {
+        status: 'skipped',
+        trigger: 'manual',
+        reason: 'Mock 会话没有可压缩的历史',
+        beforeTokens: 0,
+        afterTokens: 0,
+        compactTriggerTokens: 0,
+        belowTrigger: true,
+        summarySaveStatus: 'not_attempted',
+        sessionSummary: null,
+        compact: null,
+      }
     },
 
     // ---- 聊天 ----
@@ -328,6 +348,45 @@ export function createMockApiClient(): ApiClient {
       db.addDocument(userId, doc)
       scheduleBuild(userId, doc.id)
       return { ...doc }
+    },
+
+    async replaceDocument(documentId: string, file: File): Promise<DocumentItem> {
+      const userId = requireUserId()
+      const existing = db.listDocuments(userId).find((doc) => doc.id === documentId)
+      if (!existing) throw new RequestError(404, '文档不存在')
+      if (!/\.(pdf|md|txt)$/.test(file.name.toLowerCase())) {
+        throw new RequestError(400, '仅支持 PDF / Markdown / TXT 文件')
+      }
+      if (file.size > 50 * 1024 * 1024) {
+        throw new RequestError(400, '文件大小不能超过 50MB')
+      }
+      const updated = db.updateDocument(userId, documentId, {
+        name: file.name,
+        size: file.size,
+        status: 'converting',
+        chunkCount: undefined,
+        readyAt: undefined,
+        error: undefined,
+      })
+      scheduleBuild(userId, documentId)
+      return { ...updated! }
+    },
+
+    async rebuildDocument(documentId: string): Promise<DocumentItem> {
+      const userId = requireUserId()
+      const existing = db.listDocuments(userId).find((doc) => doc.id === documentId)
+      if (!existing) throw new RequestError(404, '文档不存在')
+      if (existing.status === 'converting' || existing.status === 'building') {
+        throw new RequestError(409, '文档正在构建')
+      }
+      const updated = db.updateDocument(userId, documentId, {
+        status: 'converting',
+        chunkCount: undefined,
+        readyAt: undefined,
+        error: undefined,
+      })
+      scheduleBuild(userId, documentId)
+      return { ...updated! }
     },
 
     async deleteDocument(documentId: string): Promise<void> {

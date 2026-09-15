@@ -147,7 +147,11 @@ class ContextBuilder:
                 session_summary=state.session_summary,
             )
 
-        compactable = self._active_compactable(prepared, state)
+        compactable = (
+            list(prepared.gathered.compactable)
+            if force_compact
+            else self._active_compactable(prepared, state)
+        )
         attempt, save_status, saved_summary, reason = await self._compact_and_save(
             state,
             prepared,

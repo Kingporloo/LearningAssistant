@@ -17,7 +17,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executor;
 
-/** 用户文档落盘、异步 RAG 构建、状态查询和删除编排。 */
+/** 用户文档落盘、替换、异步 RAG 构建、状态查询和删除编排。 */
 final class DocumentService {
     private static final Set<String> SUPPORTED_EXTENSIONS = Set.of(".pdf", ".md", ".txt");
 
@@ -92,7 +92,99 @@ final class DocumentService {
             return view(document);
         } catch (RuntimeException exception) {
             documents.fail(userId, documentId, requestId, "文档构建任务无法启动");
-            deleteFiles(directory);
+            throw exception;
+        }
+    }
+
+    ObjectNode replace(String userId, String documentId, String fileName, byte[] content) {
+        String extension = validateFileName(fileName);
+        if (content.length == 0) {
+            throw new AgentGatewayException(400, "上传文件不能为空");
+        }
+        var existing = documents.find(userId, documentId)
+                .orElseThrow(() -> new AgentGatewayException(404, "文档不存在"));
+        String requestId = "rag_build_" + UUID.randomUUID();
+        Path directory = uploadRoot.resolve(userId).resolve(documentId);
+        Path source = directory.resolve("source" + extension);
+        Path temporary = directory.resolve("upload-" + requestId + ".tmp");
+        var document = new DocumentDataPort.DocumentData(
+                documentId,
+                userId,
+                requestId,
+                fileName,
+                content.length,
+                source.toString(),
+                directory.resolve("content.md").toString(),
+                "converting",
+                null,
+                null,
+                null,
+                existing.createdAt(),
+                null);
+        try {
+            Files.createDirectories(directory);
+            Files.write(temporary, content);
+            if (!documents.startReplacement(document)) {
+                Files.deleteIfExists(temporary);
+                throw new AgentGatewayException(409, "文档正在构建，不能替换");
+            }
+            Files.move(
+                    temporary,
+                    source,
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING);
+            if (!source.equals(Path.of(existing.sourcePath()))) {
+                Files.deleteIfExists(Path.of(existing.sourcePath()));
+            }
+        } catch (AgentGatewayException exception) {
+            throw exception;
+        } catch (IOException exception) {
+            documents.fail(userId, documentId, requestId, "无法保存替换文件");
+            try {
+                Files.deleteIfExists(temporary);
+            } catch (IOException ignored) {
+                // 临时文件由运维清理。
+            }
+            throw new AgentGatewayException(500, "无法保存替换文件");
+        }
+        try {
+            executor.execute(() -> build(document));
+            return view(document);
+        } catch (RuntimeException exception) {
+            documents.fail(userId, documentId, requestId, "文档构建任务无法启动");
+            throw exception;
+        }
+    }
+
+    ObjectNode rebuild(String userId, String documentId) {
+        var existing = documents.find(userId, documentId)
+                .orElseThrow(() -> new AgentGatewayException(404, "文档不存在"));
+        if (!Files.isRegularFile(Path.of(existing.sourcePath()))) {
+            throw new AgentGatewayException(409, "文档原文件不存在，请先替换文件");
+        }
+        String requestId = "rag_build_" + UUID.randomUUID();
+        if (!documents.restartBuild(userId, documentId, requestId)) {
+            throw new AgentGatewayException(409, "文档正在构建，不能重复启动");
+        }
+        var document = new DocumentDataPort.DocumentData(
+                documentId,
+                userId,
+                requestId,
+                existing.fileName(),
+                existing.fileSize(),
+                existing.sourcePath(),
+                existing.markdownPath(),
+                "converting",
+                null,
+                null,
+                null,
+                existing.createdAt(),
+                null);
+        try {
+            executor.execute(() -> build(document));
+            return view(document);
+        } catch (RuntimeException exception) {
+            documents.fail(userId, documentId, requestId, "文档构建任务无法启动");
             throw exception;
         }
     }

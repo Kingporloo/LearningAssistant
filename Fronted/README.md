@@ -2,8 +2,9 @@
 
 ## 后端接口配置
 
-前端默认使用 Mock。联调时复制 `.env.example` 为 `.env.local`，设置
-`VITE_USE_MOCK=false`。浏览器只访问 `VITE_API_BASE_URL` 指向的 Java 统一网关。
+前端默认连接真实 Java 网关。复制 `.env.example` 为 `.env.local` 后，通过
+`VITE_API_BASE_URL` 配置网关地址；只有显式设置 `VITE_USE_MOCK=true` 时才使用
+浏览器内 Mock 数据。
 
 当前本地网关地址为 `http://127.0.0.1:8082`。它统一提供用户、会话、Agent 和
 RAG 文档接口。文档页把 PDF、Markdown 或 TXT 原始字节提交给该网关，并轮询

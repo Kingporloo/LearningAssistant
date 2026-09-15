@@ -343,7 +343,7 @@ public final class MySqlDataStore {
                 var statement = connection.prepareStatement("""
                         SELECT COUNT(*) AS total,
                                SUM(status = 'ready') AS ready_count,
-                               SUM(status = 'building') AS building_count,
+                               SUM(status IN ('converting', 'building')) AS building_count,
                                SUM(status = 'failed') AS failed_count
                         FROM rag_document
                         WHERE user_id = ?

@@ -213,8 +213,52 @@ class AgentGatewayHandlerTest {
             assertEquals(1, ready.path("chunkCount").asInt());
             assertEquals(3, ready.path("pageCount").asInt());
 
+            var rebuilt = send(
+                    base.resolve("/documents/" + documentId + "/rebuild"),
+                    "POST",
+                    first.token(),
+                    "{}");
+            assertEquals(202, rebuilt.statusCode());
+            assertEquals(documentId, mapper.readTree(rebuilt.body()).path("id").asText());
+            ready = waitForReady(base, first.token(), documentId);
+
+            var replacement = upload(
+                    base.resolve("/documents/" + documentId
+                            + "?filename=%E6%96%B0%E6%95%99%E6%9D%90.md"),
+                    first.token(),
+                    "# 新教材".getBytes(StandardCharsets.UTF_8),
+                    "PUT");
+            assertEquals(202, replacement.statusCode());
+            assertEquals(documentId, mapper.readTree(replacement.body()).path("id").asText());
+            ready = waitForReady(base, first.token(), documentId);
+            assertEquals("新教材.md", ready.path("name").asText());
+
+            try (var connection = source.getConnection();
+                    var statement = connection.prepareStatement("""
+                            UPDATE rag_document SET status = 'failed'
+                            WHERE user_id = ? AND document_id = ?
+                            """)) {
+                statement.setString(1, first.user().userId());
+                statement.setString(2, documentId);
+                statement.executeUpdate();
+            }
+            var retryFailed = send(
+                    base.resolve("/documents/" + documentId + "/rebuild"),
+                    "POST",
+                    first.token(),
+                    "{}");
+            assertEquals(202, retryFailed.statusCode());
+            ready = waitForReady(base, first.token(), documentId);
+            assertEquals("ready", ready.path("status").asText());
+
             var isolated = send(base.resolve("/documents"), "GET", second.token(), null);
             assertEquals(0, mapper.readTree(isolated.body()).size());
+            var forbiddenRebuild = send(
+                    base.resolve("/documents/" + documentId + "/rebuild"),
+                    "POST",
+                    second.token(),
+                    "{}");
+            assertEquals(404, forbiddenRebuild.statusCode());
             var forbiddenDelete = send(
                     base.resolve("/documents/" + documentId), "DELETE", second.token(), null);
             assertEquals(404, forbiddenDelete.statusCode());
@@ -439,10 +483,18 @@ class AgentGatewayHandlerTest {
     }
 
     private HttpResponse<String> upload(URI uri, String token, byte[] body) throws Exception {
+        return upload(uri, token, body, "POST");
+    }
+
+    private HttpResponse<String> upload(
+            URI uri,
+            String token,
+            byte[] body,
+            String method) throws Exception {
         var request = HttpRequest.newBuilder(uri)
                 .header("Authorization", "Bearer " + token)
                 .header("Content-Type", "application/octet-stream")
-                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                .method(method, HttpRequest.BodyPublishers.ofByteArray(body))
                 .build();
         return HttpClient.newHttpClient().send(
                 request, HttpResponse.BodyHandlers.ofString());
