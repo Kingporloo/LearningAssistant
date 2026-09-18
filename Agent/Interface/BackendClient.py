@@ -144,6 +144,17 @@ class BackendClient:
             raise BackendError(f"Java 后端响应必须是 JSON 对象: {path}")
         return result
 
+    async def health(self) -> dict[str, Any]:
+        try:
+            response = await self._client.get("/health/ready")
+            response.raise_for_status()
+            result = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise BackendError("Java 数据服务未就绪") from exc
+        if not isinstance(result, dict) or result.get("status") != "ready":
+            raise BackendError("Java 数据服务未就绪")
+        return result
+
     async def rag_search(
         self,
         context: RunContext,

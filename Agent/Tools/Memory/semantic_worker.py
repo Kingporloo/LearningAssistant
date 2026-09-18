@@ -38,6 +38,10 @@ class SemanticMemoryWorker:
         if self._wakeups.empty():
             self._wakeups.put_nowait(None)
 
+    @property
+    def running(self) -> bool:
+        return self._task is not None and not self._task.done()
+
     async def aclose(self) -> None:
         if self._task is not None:
             self._task.cancel()

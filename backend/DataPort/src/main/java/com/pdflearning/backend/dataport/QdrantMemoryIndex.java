@@ -91,6 +91,10 @@ public final class QdrantMemoryIndex {
         requireOk(http.request("POST", path("/points/delete?wait=true"), body), "删除");
     }
 
+    public void checkReady() {
+        requireOk(http.request("GET", path(""), null), "健康检查");
+    }
+
     private ObjectNode filter(String userId, String memoryType, String memoryId) {
         var must = mapper.createArrayNode();
         must.add(match("user_id", userId));

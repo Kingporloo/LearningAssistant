@@ -11,6 +11,23 @@ RAG 文档接口。文档页把 PDF、Markdown 或 TXT 原始字节提交给该�
 Java 保存的转换和建库状态。真实聊天请求会把前端创建的 `request_id` 和
 `message_id` 一并发送，用于 Java 运行幂等和消息关联。
 
+## 浏览器端到端测试
+
+测试使用 Playwright 和 Chrome，前端保持默认的真实 API 客户端；测试进程在浏览器
+网络层提供确定性的 Java 网关响应，因此会实际覆盖 HTTP 请求、鉴权头和 SSE 解析，
+不依赖模型或数据库状态。
+
+首次运行先安装依赖并确保本机有 Chrome：
+
+```bash
+npm install
+npm run test:e2e
+```
+
+当前用例覆盖注册与受保护路由、创建会话与 Agent SSE 工具调用、手动 Compact，
+以及文档上传、建库轮询、重建和删除。失败时截图、trace 和 HTML 报告会写入
+`test-results/` 与 `playwright-report/`。
+
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 
 Currently, two official plugins are available:

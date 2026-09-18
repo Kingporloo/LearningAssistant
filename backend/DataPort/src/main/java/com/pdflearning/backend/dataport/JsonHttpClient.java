@@ -39,8 +39,14 @@ final class JsonHttpClient {
         try {
             var builder = HttpRequest.newBuilder(baseUri.resolve(path))
                     .timeout(timeout)
-                    .header("Content-Type", "application/json")
-                    .method(method, HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)));
+                    .method(
+                            method,
+                            body == null
+                                    ? HttpRequest.BodyPublishers.noBody()
+                                    : HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)));
+            if (body != null) {
+                builder.header("Content-Type", "application/json");
+            }
             if (authValue != null && !authValue.isBlank()) {
                 builder.header(authHeader, authValue);
             }

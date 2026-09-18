@@ -11,6 +11,7 @@ from threading import Lock
 from typing import Annotated, Any
 
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from PDF2Markdown import convert_file
@@ -30,6 +31,27 @@ class BuildRequest(BaseModel):
         description="Java 管理的 Markdown 输出路径；提供时先转换原文件",
     )
     source_name: str | None = None
+
+
+@app.get("/health/live")
+async def health_live() -> dict[str, str]:
+    return {"status": "alive"}
+
+
+@app.get("/health/ready")
+async def health_ready() -> JSONResponse:
+    allowed_root = os.getenv("RAG_ALLOWED_ROOT")
+    token = os.getenv("PYTHON_INTERNAL_TOKEN")
+    ready = bool(
+        allowed_root
+        and token
+        and Path(allowed_root).is_dir()
+        and os.access(allowed_root, os.R_OK | os.W_OK)
+    )
+    return JSONResponse(
+        {"status": "ready" if ready else "not_ready"},
+        status_code=200 if ready else 503,
+    )
 
 
 def _authenticate(authorization: str | None) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import os
@@ -11,8 +12,9 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Annotated
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from Agent.AgentLoop import AgentLoop
 from Agent.Assistant import Assistant
@@ -43,6 +45,52 @@ app = FastAPI(
     redoc_url=None,
     lifespan=_lifespan,
 )
+
+
+@app.get("/health/live")
+async def health_live() -> dict[str, str]:
+    return {"status": "alive"}
+
+
+@app.get("/health/ready")
+async def health_ready() -> JSONResponse:
+    components = {"configuration": "up", "java": "down", "rag_mcp": "down", "memory_mcp": "down"}
+    try:
+        _assistant()
+        _mcp_client()
+        if not os.getenv("PYTHON_INTERNAL_TOKEN") or not os.getenv("MCP_INTERNAL_TOKEN"):
+            raise ValueError("内部 token 未配置")
+    except (TypeError, ValueError, RuntimeError):
+        components["configuration"] = "down"
+
+    async def probe_java() -> str:
+        try:
+            await asyncio.wait_for(_backend_client().health(), timeout=5)
+            return "up"
+        except Exception:
+            return "down"
+
+    async def probe_mcp(client: httpx.AsyncClient, url: str) -> str:
+        try:
+            health_url = url.rstrip("/").removesuffix("/mcp") + "/health/ready"
+            response = await client.get(health_url)
+            return "up" if response.status_code == 200 else "down"
+        except httpx.HTTPError:
+            return "down"
+
+    async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
+        java, rag_mcp, memory_mcp = await asyncio.gather(
+            probe_java(),
+            probe_mcp(client, os.getenv("RAG_MCP_URL", "http://127.0.0.1:8801/mcp")),
+            probe_mcp(client, os.getenv("MEMORY_MCP_URL", "http://127.0.0.1:8802/mcp")),
+        )
+    components.update(java=java, rag_mcp=rag_mcp, memory_mcp=memory_mcp)
+
+    ready = all(value == "up" for value in components.values())
+    return JSONResponse(
+        {"status": "ready" if ready else "not_ready", "components": components},
+        status_code=200 if ready else 503,
+    )
 
 
 def require_trusted_user(

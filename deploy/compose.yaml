@@ -71,8 +71,8 @@ services:
     volumes:
       - milvus-data:/var/lib/milvus
     ports:
-      - "127.0.0.1:19530:19530"
-      - "127.0.0.1:9091:9091"
+      - "127.0.0.1:${MILVUS_GRPC_PORT:-19530}:19530"
+      - "127.0.0.1:${MILVUS_HEALTH_PORT:-9091}:9091"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
       interval: 30s
@@ -133,12 +133,38 @@ services:
     restart: "no"
     networks: [database]
 
+  qdrant:
+    image: qdrant/qdrant:v1.15.4
+    profiles: ["local-qdrant"]
+    restart: unless-stopped
+    volumes:
+      - qdrant-data:/qdrant/storage
+    ports:
+      - "127.0.0.1:${QDRANT_HOST_PORT:-6333}:6333"
+    networks: [database]
+
+  qdrant-init:
+    image: curlimages/curl:8.12.1
+    profiles: ["local-qdrant"]
+    environment:
+      QDRANT_MEMORY_COLLECTION: ${QDRANT_MEMORY_COLLECTION}
+      EMBEDDING_VECTOR_DIMENSION: ${EMBEDDING_VECTOR_DIMENSION:-768}
+    volumes:
+      - ./init/qdrant.sh:/init/qdrant.sh:ro
+    entrypoint: ["/bin/sh", "/init/qdrant.sh"]
+    depends_on:
+      qdrant:
+        condition: service_started
+    restart: "no"
+    networks: [database]
+
 volumes:
   mysql-data:
   milvus-etcd-data:
   milvus-minio-data:
   milvus-data:
   neo4j-data:
+  qdrant-data:
 
 networks:
   database:

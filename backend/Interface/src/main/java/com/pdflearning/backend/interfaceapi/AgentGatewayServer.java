@@ -7,8 +7,12 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -18,14 +22,23 @@ public final class AgentGatewayServer implements AutoCloseable {
     private final HttpServer server;
     private final ExecutorService executor;
     private final DataPortResources resources;
+    private final URI pythonBaseUrl;
+    private final URI pythonRagBaseUrl;
+    private final ObjectMapper mapper;
 
     private AgentGatewayServer(
             HttpServer server,
             ExecutorService executor,
-            DataPortResources resources) {
+            DataPortResources resources,
+            URI pythonBaseUrl,
+            URI pythonRagBaseUrl,
+            ObjectMapper mapper) {
         this.server = server;
         this.executor = executor;
         this.resources = resources;
+        this.pythonBaseUrl = pythonBaseUrl;
+        this.pythonRagBaseUrl = pythonRagBaseUrl;
+        this.mapper = mapper;
     }
 
     public static AgentGatewayServer fromEnvironment() {
@@ -83,9 +96,13 @@ public final class AgentGatewayServer implements AutoCloseable {
             resources.documents().recoverInterrupted();
 
             var server = HttpServer.create(new InetSocketAddress(host, port), 0);
+            var application = new AgentGatewayServer(
+                    server, executor, resources, pythonBaseUrl, pythonRagBaseUrl, mapper);
+            server.createContext("/health/live", exchange -> application.health(exchange, false));
+            server.createContext("/health/ready", exchange -> application.health(exchange, true));
             server.createContext("/", handler::handle);
             server.setExecutor(executor);
-            return new AgentGatewayServer(server, executor, resources);
+            return application;
         } catch (IOException | RuntimeException exception) {
             if (executor != null) {
                 executor.close();
@@ -111,6 +128,65 @@ public final class AgentGatewayServer implements AutoCloseable {
         server.stop(0);
         executor.close();
         resources.close();
+    }
+
+    private void health(com.sun.net.httpserver.HttpExchange exchange, boolean checkDependencies) {
+        try {
+            if (!"GET".equals(exchange.getRequestMethod())) {
+                exchange.getResponseHeaders().set("Allow", "GET");
+                sendHealth(exchange, 405, Map.of("status", "error"));
+                return;
+            }
+            if (!checkDependencies) {
+                sendHealth(exchange, 200, Map.of("status", "alive"));
+                return;
+            }
+            var components = new LinkedHashMap<String, String>();
+            var data = resources.readiness();
+            components.put("data", data.ready() ? "up" : "down");
+            components.put("agent", probe(pythonBaseUrl.resolve("/health/ready")));
+            components.put("rag_build", probe(pythonRagBaseUrl.resolve("/health/ready")));
+            boolean ready = components.values().stream().allMatch("up"::equals);
+            sendHealth(
+                    exchange,
+                    ready ? 200 : 503,
+                    Map.of(
+                            "status", ready ? "ready" : "not_ready",
+                            "components", components));
+        } catch (RuntimeException | IOException exception) {
+            exchange.close();
+        } finally {
+            exchange.close();
+        }
+    }
+
+    private String probe(URI uri) {
+        try {
+            var request = HttpRequest.newBuilder(uri)
+                    .timeout(Duration.ofSeconds(5))
+                    .GET()
+                    .build();
+            var response = HttpClient.newHttpClient().send(
+                    request, HttpResponse.BodyHandlers.discarding());
+            return response.statusCode() == 200 ? "up" : "down";
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return "down";
+        } catch (IOException | RuntimeException exception) {
+            return "down";
+        }
+    }
+
+    private void sendHealth(
+            com.sun.net.httpserver.HttpExchange exchange,
+            int status,
+            Map<String, ?> body) throws IOException {
+        var bytes = mapper.writeValueAsBytes(body);
+        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        exchange.sendResponseHeaders(status, bytes.length);
+        try (var output = exchange.getResponseBody()) {
+            output.write(bytes);
+        }
     }
 
     private static AgentRunRequest.AgentConfig agentConfig(Map<String, String> environment) {

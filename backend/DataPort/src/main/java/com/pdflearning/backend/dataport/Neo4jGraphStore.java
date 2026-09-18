@@ -138,6 +138,13 @@ public final class Neo4jGraphStore implements AutoCloseable {
         }
     }
 
+    public void checkReady() {
+        driver.verifyConnectivity();
+        try (var session = driver.session(sessionConfig)) {
+            session.run("RETURN 1").consume();
+        }
+    }
+
     @Override
     public void close() {
         driver.close();

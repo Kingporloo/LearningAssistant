@@ -2,14 +2,21 @@ package com.pdflearning.backend.dataport;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import java.sql.SQLException;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import org.neo4j.driver.AuthTokens;
 import org.neo4j.driver.GraphDatabase;
 
 public final class DataPortResources implements AutoCloseable {
+    public record Readiness(boolean ready, Map<String, String> components) {
+    }
+
     private final HikariDataSource dataSource;
     private final Neo4jGraphStore graphStore;
+    private final QdrantMemoryIndex qdrant;
+    private final MilvusRagIndex milvus;
     private final UserDataPort users;
     private final ChatDataPort chats;
     private final AgentRunDataPort agentRuns;
@@ -23,6 +30,8 @@ public final class DataPortResources implements AutoCloseable {
     private DataPortResources(
             HikariDataSource dataSource,
             Neo4jGraphStore graphStore,
+            QdrantMemoryIndex qdrant,
+            MilvusRagIndex milvus,
             UserDataPort users,
             ChatDataPort chats,
             AgentRunDataPort agentRuns,
@@ -34,6 +43,8 @@ public final class DataPortResources implements AutoCloseable {
             RagDataPort rag) {
         this.dataSource = dataSource;
         this.graphStore = graphStore;
+        this.qdrant = qdrant;
+        this.milvus = milvus;
         this.users = users;
         this.chats = chats;
         this.agentRuns = agentRuns;
@@ -92,6 +103,8 @@ public final class DataPortResources implements AutoCloseable {
             return new DataPortResources(
                     dataSource,
                     graph,
+                    qdrant,
+                    milvus,
                     new UserDataPort(dataSource),
                     new ChatDataPort(dataSource),
                     new AgentRunDataPort(dataSource, ledgers),
@@ -143,12 +156,47 @@ public final class DataPortResources implements AutoCloseable {
         return rag;
     }
 
+    public Readiness readiness() {
+        var components = new LinkedHashMap<String, String>();
+        check(components, "mysql", this::checkMySql);
+        check(components, "milvus", milvus::checkReady);
+        check(components, "neo4j", graphStore::checkReady);
+        check(components, "qdrant", qdrant::checkReady);
+        return new Readiness(
+                components.values().stream().allMatch("up"::equals),
+                Map.copyOf(components));
+    }
+
     @Override
     public void close() {
         try {
             graphStore.close();
         } finally {
             dataSource.close();
+        }
+    }
+
+    private void checkMySql() {
+        try (var connection = dataSource.getConnection();
+                var statement = connection.prepareStatement("SELECT 1");
+                var result = statement.executeQuery()) {
+            if (!result.next() || result.getInt(1) != 1) {
+                throw new DataPortException("MySQL 健康检查返回异常");
+            }
+        } catch (SQLException exception) {
+            throw new DataPortException("MySQL 健康检查失败", exception);
+        }
+    }
+
+    private static void check(
+            Map<String, String> components,
+            String name,
+            Runnable operation) {
+        try {
+            operation.run();
+            components.put(name, "up");
+        } catch (RuntimeException exception) {
+            components.put(name, "down");
         }
     }
 

@@ -18,8 +18,10 @@ from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import Context, FastMCP
 from pydantic import Field
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
-from Agent.Interface.BackendClient import BackendClient, RunContext
+from Agent.Interface.BackendClient import BackendClient, BackendError, RunContext
 from Agent.Tools.Memory.memory import MemoryService
 from Agent.Tools.Memory.semantic import SemanticProcessor
 from Agent.Tools.Memory.semantic_worker import SemanticMemoryWorker
@@ -106,6 +108,22 @@ mcp = FastMCP(
     auth=_auth_settings(),
     token_verifier=_InternalTokenVerifier(),
 )
+
+
+@mcp.custom_route("/health/live", methods=["GET"], include_in_schema=False)
+async def health_live(_request: Request) -> JSONResponse:
+    return JSONResponse({"status": "alive"})
+
+
+@mcp.custom_route("/health/ready", methods=["GET"], include_in_schema=False)
+async def health_ready(_request: Request) -> JSONResponse:
+    if _service is None or _worker is None or not _worker.running:
+        return JSONResponse({"status": "not_ready", "components": {"worker": "down"}}, status_code=503)
+    try:
+        await asyncio.wait_for(_service.backend.health(), timeout=5)
+    except (BackendError, TimeoutError):
+        return JSONResponse({"status": "not_ready", "components": {"java": "down", "worker": "up"}}, status_code=503)
+    return JSONResponse({"status": "ready", "components": {"java": "up", "worker": "up"}})
 
 
 def _get_service() -> MemoryService:

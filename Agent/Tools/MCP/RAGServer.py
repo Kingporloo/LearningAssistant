@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hmac
 import os
 import sys
@@ -16,8 +17,10 @@ if str(PROJECT_ROOT) not in sys.path:
 from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import Context, FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
-from Agent.Interface.BackendClient import RunContext
+from Agent.Interface.BackendClient import BackendClient, BackendError, RunContext
 from Agent.Tools.RAG.rag import RAGSystem
 
 _system: RAGSystem | None = None
@@ -84,6 +87,25 @@ mcp = FastMCP(
     auth=_auth_settings(),
     token_verifier=_InternalTokenVerifier(),
 )
+
+
+@mcp.custom_route("/health/live", methods=["GET"], include_in_schema=False)
+async def health_live(_request: Request) -> JSONResponse:
+    return JSONResponse({"status": "alive"})
+
+
+@mcp.custom_route("/health/ready", methods=["GET"], include_in_schema=False)
+async def health_ready(_request: Request) -> JSONResponse:
+    backend: BackendClient | None = None
+    try:
+        backend = BackendClient.from_env()
+        await asyncio.wait_for(backend.health(), timeout=5)
+    except (BackendError, TimeoutError, ValueError):
+        return JSONResponse({"status": "not_ready", "components": {"java": "down"}}, status_code=503)
+    finally:
+        if backend is not None:
+            await backend.aclose()
+    return JSONResponse({"status": "ready", "components": {"java": "up"}})
 
 
 def _get_system() -> RAGSystem:

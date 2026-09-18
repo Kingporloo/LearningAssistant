@@ -133,6 +133,16 @@ public final class MilvusRagIndex {
         requireOk(http.request("POST", "/v2/vectordb/entities/delete", body), "删除文档");
     }
 
+    public void checkReady() {
+        var body = requestBody();
+        var response = requireOk(
+                http.request("POST", "/v2/vectordb/collections/has", body),
+                "健康检查");
+        if (!response.path("data").path("has").asBoolean(false)) {
+            throw new DataPortException("Milvus RAG collection 不存在");
+        }
+    }
+
     private ObjectNode requestBody() {
         var body = mapper.createObjectNode();
         body.put("collectionName", collection);

@@ -1,0 +1,160 @@
+x-python: &python
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile.python
+  restart: unless-stopped
+  init: true
+  env_file:
+    - ../.env
+    - ./.env
+  environment: &python-environment
+    JAVA_STORAGE_BASE_URL: http://java-storage:8080
+    RAG_MCP_URL: http://rag-mcp:8801/mcp
+    MEMORY_MCP_URL: http://memory-mcp:8802/mcp
+    RAG_ALLOWED_ROOT: /data/uploads
+    NO_PROXY: 127.0.0.1,localhost,java-storage,rag-mcp,memory-mcp,agent-api,rag-build-api
+  networks: [application]
+  stop_grace_period: 30s
+
+x-java: &java
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile.java
+  restart: unless-stopped
+  init: true
+  env_file:
+    - ../.env
+    - ./.env
+  environment: &java-environment
+    MYSQL_JDBC_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=utf8
+    MILVUS_URL: http://milvus:19530
+    NEO4J_URI: bolt://neo4j:7687
+    RAG_ALLOWED_ROOT: /data/uploads
+    NO_PROXY: 127.0.0.1,localhost,mysql,milvus,neo4j,java-storage,agent-api,rag-build-api
+  networks: [database, application]
+  stop_grace_period: 30s
+
+services:
+  java-storage:
+    <<: *java
+    command: ["java", "-jar", "/app/agent-interface.jar"]
+    environment:
+      <<: *java-environment
+      JAVA_INTERFACE_HOST: 0.0.0.0
+      JAVA_INTERFACE_PORT: 8080
+    depends_on:
+      mysql:
+        condition: service_healthy
+      milvus-init:
+        condition: service_completed_successfully
+      neo4j-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health/ready"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+
+  rag-mcp:
+    <<: *python
+    command: ["python", "-m", "Agent.Tools.MCP.RAGServer", "--transport", "streamable-http"]
+    environment:
+      <<: *python-environment
+      RAG_MCP_HOST: 0.0.0.0
+      RAG_MCP_PORT: 8801
+    depends_on:
+      java-storage:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8801/health/ready"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  memory-mcp:
+    <<: *python
+    command: ["python", "-m", "Agent.Tools.MCP.MemoryServer", "--transport", "streamable-http"]
+    environment:
+      <<: *python-environment
+      MEMORY_MCP_HOST: 0.0.0.0
+      MEMORY_MCP_PORT: 8802
+    depends_on:
+      java-storage:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8802/health/ready"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  agent-api:
+    <<: *python
+    command: ["uvicorn", "Agent.Interface.AgentAPI:app", "--host", "0.0.0.0", "--port", "8800"]
+    environment:
+      <<: *python-environment
+    depends_on:
+      rag-mcp:
+        condition: service_healthy
+      memory-mcp:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8800/health/ready"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  rag-build-api:
+    <<: *python
+    command: ["uvicorn", "Agent.Interface.RAGBuildAPI:app", "--host", "0.0.0.0", "--port", "8803"]
+    environment:
+      <<: *python-environment
+    volumes:
+      - uploads-data:/data/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8803/health/ready"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  java-gateway:
+    <<: *java
+    command:
+      - java
+      - -cp
+      - /app/agent-interface.jar
+      - com.pdflearning.backend.interfaceapi.AgentGatewayServer
+    environment:
+      <<: *java-environment
+      AGENT_GATEWAY_HOST: 0.0.0.0
+      AGENT_GATEWAY_PORT: 8082
+      PYTHON_AGENT_BASE_URL: http://agent-api:8800
+      PYTHON_RAG_BASE_URL: http://rag-build-api:8803
+    volumes:
+      - uploads-data:/data/uploads
+    ports:
+      - "127.0.0.1:${AGENT_GATEWAY_HOST_PORT:-8082}:8082"
+    depends_on:
+      java-storage:
+        condition: service_healthy
+      agent-api:
+        condition: service_healthy
+      rag-build-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8082/health/ready"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  uploads-data:
+
+networks:
+  application:
+    driver: bridge

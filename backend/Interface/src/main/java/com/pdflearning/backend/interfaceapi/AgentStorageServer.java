@@ -60,6 +60,8 @@ public final class AgentStorageServer implements AutoCloseable {
         register(
                 "/internal/storage/context/summary",
                 DataPortRequestHandler.Operation.CONTEXT_SUMMARY_STORE);
+        server.createContext("/health/live", exchange -> handleHealth(exchange, false));
+        server.createContext("/health/ready", exchange -> handleHealth(exchange, true));
         server.setExecutor(executor);
     }
 
@@ -169,6 +171,31 @@ public final class AgentStorageServer implements AutoCloseable {
             safeSend(exchange, 400, error("无法读取请求正文"));
         } catch (RuntimeException exception) {
             safeSend(exchange, 500, error("数据接口处理失败"));
+        } finally {
+            exchange.close();
+        }
+    }
+
+    private void handleHealth(HttpExchange exchange, boolean checkDependencies) {
+        try {
+            if (!"GET".equals(exchange.getRequestMethod())) {
+                exchange.getResponseHeaders().set("Allow", "GET");
+                send(exchange, 405, error("只允许 GET 请求"));
+                return;
+            }
+            if (!checkDependencies) {
+                send(exchange, 200, Map.of("status", "alive"));
+                return;
+            }
+            var readiness = resources.readiness();
+            send(
+                    exchange,
+                    readiness.ready() ? 200 : 503,
+                    Map.of(
+                            "status", readiness.ready() ? "ready" : "not_ready",
+                            "components", readiness.components()));
+        } catch (IOException exception) {
+            exchange.close();
         } finally {
             exchange.close();
         }

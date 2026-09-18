@@ -1,0 +1,14 @@
+.git
+.codex
+.agents
+.env
+deploy/.env
+**/__pycache__
+**/*.pyc
+**/target
+Fronted/node_modules
+Fronted/dist
+Agent/Tools/RAG/*.db
+Pdf
+docs
+tests
