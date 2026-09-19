@@ -56,6 +56,7 @@ class AgentLoop:
         summary_model_window: int | None = None,
         score_relevance: RelevanceFunction | None = None,
         system_prompt: str = SYSTEM_PROMPT,
+        enabled_tools: tuple[str, ...] | list[str] | None = None,
         max_tool_rounds: int = 5,
     ) -> None:
         if not system_prompt.strip():
@@ -76,6 +77,9 @@ class AgentLoop:
         self.summary_model_window = summary_model_window
         self.score_relevance = score_relevance
         self.system_prompt = system_prompt
+        self.enabled_tools = (
+            None if enabled_tools is None else frozenset(enabled_tools)
+        )
         self.max_tool_rounds = max_tool_rounds
         self._graph = _compile_graph()
 
@@ -109,8 +113,11 @@ class AgentLoop:
         try:
             async with self.mcp_client.bind(run.run_context) as bound_client:
                 tools = await bound_client.get_tools()
-                if not tools:
-                    raise RuntimeError("MCP 工具发现完成，但没有返回任何工具")
+                if self.enabled_tools is not None:
+                    tools = [
+                        tool for tool in tools
+                        if _tool_name(tool) in self.enabled_tools
+                    ]
 
                 context_builder = ContextBuilder(
                     config=self.context_config,
@@ -214,6 +221,16 @@ class AgentLoop:
             retryable=False,
             usage={},
         )
+
+
+def _tool_name(tool: Any) -> str | None:
+    name = getattr(tool, "name", None)
+    if isinstance(name, str):
+        return name
+    if isinstance(tool, dict):
+        value = tool.get("function", {}).get("name")
+        return value if isinstance(value, str) else None
+    return None
 
 
 def _compile_graph():

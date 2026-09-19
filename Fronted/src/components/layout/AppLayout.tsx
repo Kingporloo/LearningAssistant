@@ -44,7 +44,7 @@ export function AppLayout() {
           >
             <IconMenu className="h-5 w-5" />
           </button>
-          <span className="text-sm font-semibold text-slate-800">智能体老师</span>
+          <span className="text-sm font-semibold text-slate-800">LearningAssistant</span>
         </div>
 
         <main className="min-h-0 flex-1 bg-slate-50">

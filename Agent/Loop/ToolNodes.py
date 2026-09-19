@@ -37,6 +37,10 @@ async def execute_tools(
     records: list[ToolExecutionRecord] = []
     ledger_operations = []
     memory_changed = False
+    allowed_tools = {
+        name for tool in runtime.context.tools
+        if (name := _tool_name(tool)) is not None
+    }
     for call in message.tool_calls:
         call_id = call["id"]
         name = call["name"]
@@ -52,6 +56,8 @@ async def execute_tools(
         })
         forced_outcome = None
         try:
+            if name not in allowed_tools:
+                raise ValueError(f"工具 {name!r} 未在本次运行中启用")
             raw_result = await runtime.context.mcp_client.call_tool(name, arguments)
         except Exception as exc:
             raw_result = tool_error_result(name, exc)
@@ -188,6 +194,16 @@ def _failure(message: str) -> dict[str, Any]:
         "error_phase": "tool",
         "retryable": False,
     }
+
+
+def _tool_name(tool: Any) -> str | None:
+    name = getattr(tool, "name", None)
+    if isinstance(name, str):
+        return name
+    if isinstance(tool, dict):
+        value = tool.get("function", {}).get("name")
+        return value if isinstance(value, str) else None
+    return None
 
 
 __all__ = ["execute_tools", "reject_tool_calls"]

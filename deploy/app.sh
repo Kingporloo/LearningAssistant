@@ -51,8 +51,8 @@ case "$command" in
         ;;
     health)
         require_configuration
-        gateway_port="$(sed -n 's/^AGENT_GATEWAY_HOST_PORT=//p' "$deploy_env" | tail -1)"
-        curl -fsS "http://127.0.0.1:${gateway_port:-8082}/health/ready"
+        frontend_port="$(sed -n 's/^FRONTEND_HOST_PORT=//p' "$deploy_env" | tail -1)"
+        curl -fsS "http://127.0.0.1:${frontend_port:-8088}/health/ready"
         printf '\n'
         ;;
     logs)

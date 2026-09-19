@@ -6,13 +6,14 @@
  */
 
 import type {
+  AgentSettings,
   ChatMessage,
   DocumentItem,
   SessionInfo,
   User,
 } from '../types'
 
-const PREFIX = 'pdflearning.mock.v1'
+const PREFIX = 'learningassistant.mock.v1'
 
 interface StoredUser extends User {
   password: string
@@ -23,6 +24,7 @@ interface UserData {
   messages: Record<string, ChatMessage[]>
   documents: DocumentItem[]
   memories: MockMemory[]
+  agentSettings: AgentSettings
 }
 
 export interface MockMemory {
@@ -60,6 +62,10 @@ function ensureData(userId: string): UserData {
     existing.documents &&
     existing.memories
   ) {
+    if (!existing.agentSettings) {
+      existing.agentSettings = defaultAgentSettings()
+      write(dataKey(userId), existing)
+    }
     return existing
   }
   const fresh: UserData = {
@@ -67,9 +73,29 @@ function ensureData(userId: string): UserData {
     messages: {},
     documents: [],
     memories: [],
+    agentSettings: defaultAgentSettings(),
   }
   write(dataKey(userId), fresh)
   return fresh
+}
+
+function defaultAgentSettings(): AgentSettings {
+  return {
+    model: 'glm-4.7',
+    persona: '',
+    enabledTools: [
+      'rag__rag_search',
+      'memory__memory_store',
+      'memory__memory_forget',
+    ],
+    availableModels: ['glm-4.7'],
+    availableTools: [
+      { name: 'rag__rag_search', label: '知识库检索' },
+      { name: 'memory__memory_store', label: '保存记忆' },
+      { name: 'memory__memory_forget', label: '删除记忆' },
+    ],
+    updatedAt: null,
+  }
 }
 
 function saveData(userId: string, data: UserData): void {
@@ -116,6 +142,16 @@ export class MockDb {
     users[index] = { ...users[index], ...patch }
     this.saveUsers(users)
     return users[index]
+  }
+
+  getAgentSettings(userId: string): AgentSettings {
+    return ensureData(userId).agentSettings
+  }
+
+  saveAgentSettings(userId: string, settings: AgentSettings): void {
+    const data = ensureData(userId)
+    data.agentSettings = settings
+    saveData(userId, data)
   }
 
   // ---------- token ----------

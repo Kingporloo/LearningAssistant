@@ -4,6 +4,7 @@
 
 import type {
   AgentEventEnvelope,
+  AgentSettings,
   AuthResult,
   ChangePasswordRequest,
   ChatMessage,
@@ -15,6 +16,7 @@ import type {
   SessionInfo,
   ToolCallView,
   UpdateProfileRequest,
+  UpdateAgentSettingsRequest,
   User,
 } from '../types'
 import type {
@@ -133,6 +135,34 @@ export function createMockApiClient(): ApiClient {
         throw new RequestError(400, '新密码至少 6 位')
       }
       db.updateUserProfile(userId, { password: req.newPassword })
+    },
+
+    async getAgentSettings(): Promise<AgentSettings> {
+      return { ...db.getAgentSettings(requireUserId()) }
+    },
+
+    async updateAgentSettings(req: UpdateAgentSettingsRequest): Promise<AgentSettings> {
+      const userId = requireUserId()
+      const current = db.getAgentSettings(userId)
+      if (!current.availableModels.includes(req.model)) {
+        throw new RequestError(400, '模型不可用')
+      }
+      const allowed = new Set(current.availableTools.map((tool) => tool.name))
+      if (req.enabled_tools.some((tool) => !allowed.has(tool))) {
+        throw new RequestError(400, '工具不可用')
+      }
+      if (req.persona.length > 2000) {
+        throw new RequestError(400, '教学人设不能超过 2000 个字符')
+      }
+      const saved: AgentSettings = {
+        ...current,
+        model: req.model,
+        persona: req.persona.trim(),
+        enabledTools: [...new Set(req.enabled_tools)],
+        updatedAt: new Date().toISOString(),
+      }
+      db.saveAgentSettings(userId, saved)
+      return { ...saved }
     },
 
     // ---- 会话 ----

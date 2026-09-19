@@ -5,6 +5,7 @@
 
 import type {
   AgentEventEnvelope,
+  AgentSettings,
   AuthResult,
   ChangePasswordRequest,
   ChatMessage,
@@ -14,6 +15,7 @@ import type {
   RegisterRequest,
   SessionInfo,
   UpdateProfileRequest,
+  UpdateAgentSettingsRequest,
   User,
 } from './types'
 
@@ -50,6 +52,8 @@ export interface ApiClient {
   me(): Promise<User>
   updateProfile(req: UpdateProfileRequest): Promise<User>
   changePassword(req: ChangePasswordRequest): Promise<void>
+  getAgentSettings(): Promise<AgentSettings>
+  updateAgentSettings(req: UpdateAgentSettingsRequest): Promise<AgentSettings>
 
   // ---- 会话 ----
   listSessions(): Promise<SessionInfo[]>
@@ -71,7 +75,7 @@ export interface ApiClient {
 
 // ---- token 存取（两种实现共用） ----
 
-const TOKEN_KEY = 'pdflearning.token'
+const TOKEN_KEY = 'learningassistant.token'
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)

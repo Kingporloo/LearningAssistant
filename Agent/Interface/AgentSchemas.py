@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 from Agent.Context.ContextBuider import ContextState
 from Agent.Context.Schemas.Config import ContextConfig
@@ -61,6 +61,19 @@ class AgentConfigRequest(_RequestModel):
 
     def to_context_config(self) -> ContextConfig:
         return ContextConfig(**self.model_dump())
+
+
+class AgentRuntimeConfigRequest(_RequestModel):
+    model: NonEmptyString
+    persona: str = Field(default="", max_length=2_000)
+    enabled_tools: list[NonEmptyString] = Field(default_factory=list)
+
+    @field_validator("enabled_tools")
+    @classmethod
+    def validate_enabled_tools(cls, tools: list[str]) -> list[str]:
+        if len(tools) != len(set(tools)):
+            raise ValueError("enabled_tools 不能重复")
+        return tools
 
 
 class MessageSnapshot(_RequestModel):
@@ -205,6 +218,7 @@ class AgentRunRequest(_RequestModel):
     session_summary: SessionSummarySnapshot | None = None
     session_ledger: SessionLedgerSnapshot | None = None
     agent_config: AgentConfigRequest
+    runtime_config: AgentRuntimeConfigRequest
 
     @model_validator(mode="after")
     def validate_stable_ids(self) -> "AgentRunRequest":
@@ -256,6 +270,7 @@ class AgentCompactRequest(_RequestModel):
     session_summary: SessionSummarySnapshot | None = None
     session_ledger: SessionLedgerSnapshot | None = None
     agent_config: AgentConfigRequest
+    runtime_config: AgentRuntimeConfigRequest
 
     @model_validator(mode="after")
     def validate_stable_ids(self) -> "AgentCompactRequest":
@@ -489,6 +504,7 @@ def _count(text: str, count_tokens: Callable[[str], int]) -> int:
 __all__ = [
     "AgentCompactRequest",
     "AgentConfigRequest",
+    "AgentRuntimeConfigRequest",
     "AgentRunRequest",
     "AgentSessionRequest",
     "DialogueTurnSnapshot",

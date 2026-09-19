@@ -31,6 +31,19 @@ python evals/teacher_effect/evaluate.py \
 没有 prediction 文件时，脚本仍会校验全部样本，并输出 Select 阈值校准结果。评测集
 不直接调用线上模型，不写 Memory、RAG 或聊天数据。
 
+使用项目 `.env` 中配置的目标模型生成一轮基线：
+
+```bash
+python evals/teacher_effect/run_model_baseline.py \
+  --output-dir evals/teacher_effect/runs/<run_name> \
+  --temperature 0 \
+  --max-tokens 1800
+```
+
+运行器保存 manifest、两个子集的逐条原始回答和 `manual_review.md`。中断后可用
+`--resume` 续跑，已成功的 case 不会再次请求；当前模型端点建议保持 `--concurrency 1`。
+只有没有可见文本且没有工具调用时才安全重试一次。运行器不会执行 Memory 或其他写工具。
+
 RAG prediction 每行对应一个 case：
 
 ```json

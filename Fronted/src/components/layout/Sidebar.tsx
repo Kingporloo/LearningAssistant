@@ -109,8 +109,8 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
           <IconSparkles className="h-5 w-5" />
         </div>
         <div className="min-w-0 flex-1">
-          <h1 className="text-sm font-bold text-slate-900">智能体老师</h1>
-          <p className="text-xs text-slate-400">个人学习知识库</p>
+          <h1 className="text-sm font-bold text-slate-900">LearningAssistant</h1>
+          <p className="text-xs text-slate-400">智能体老师</p>
         </div>
         {onClose && (
           <button

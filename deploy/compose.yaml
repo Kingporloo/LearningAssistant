@@ -1,4 +1,4 @@
-name: ${COMPOSE_PROJECT_NAME:-pdf-learning-infra}
+name: ${COMPOSE_PROJECT_NAME:-learning-assistant-infra}
 
 services:
   mysql:

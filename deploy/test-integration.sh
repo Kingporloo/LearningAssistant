@@ -5,7 +5,7 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 env_file="$project_root/deploy/.env.integration"
 compose=(
     docker compose
-    --project-name pdf-learning-it
+    --project-name learning-assistant-it
     --env-file "$env_file"
     -f "$project_root/deploy/compose.yaml"
     --profile local-qdrant

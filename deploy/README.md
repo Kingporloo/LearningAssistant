@@ -1,8 +1,9 @@
 # 部署与运行
 
-项目使用 Docker Compose 统一运行 MySQL、Milvus、Neo4j、4 个 Python 服务和
-2 个 Java 服务。Compose 负责启动顺序、应用健康检查、日志收集和异常退出后的
-自动重启。生产环境默认连接 Qdrant Cloud；真实集成测试使用隔离的本地 Qdrant。
+项目使用 Docker Compose 统一运行数据库、4 个 Python 服务、2 个 Java 服务，
+以及由 Nginx 托管的前端。Compose 负责启动顺序、应用健康检查、日志收集和异常
+退出后的自动重启。生产环境默认连接 Qdrant Cloud；真实集成测试使用隔离的本地
+Qdrant。
 
 ## 首次配置
 
@@ -26,10 +27,10 @@ Python RAG 构建服务从同一路径读取，不需要宿主机路径映射。
 ./deploy/app.sh up
 ```
 
-该命令构建 Python、Java 镜像，启动基础设施和应用，并等待所有健康检查通过。
-浏览器公开 API 位于 `http://127.0.0.1:8082`。其余应用端口只在 Compose 网络中
-开放；生产环境由 Nginx 提供 `Fronted/dist`，并把公开 API 转发到 8082。
-需要修改宿主机公开端口时设置 `AGENT_GATEWAY_HOST_PORT`；容器内服务端口保持固定。
+该命令构建 Python、Java 和前端镜像，启动基础设施与应用，并等待所有健康检查
+通过。浏览器入口为 `http://127.0.0.1:8088`；同源的 `/api/*` 由 Nginx 转发给
+Java 网关，SSE 响应关闭代理缓冲。需要修改浏览器入口端口时设置
+`FRONTEND_HOST_PORT`；容器内服务端口保持固定。8082 仍绑定在本机回环地址，供调试。
 
 应用启动顺序为：
 
@@ -43,6 +44,8 @@ RAG MCP / Memory MCP + RAG Build API
 Python Agent API
         ↓
 Java Gateway
+        ↓
+Nginx / Frontend
 ```
 
 所有常驻服务使用 `restart: unless-stopped`。数据库必须通过健康检查且初始化任务
@@ -59,7 +62,13 @@ Java Gateway
 
 Java Storage 的 readiness 会实际访问 MySQL、Milvus collection、Neo4j 和 Qdrant
 collection。RAG/Memory MCP 检查 Java Storage，Agent API 检查 Java Storage 和
-两个 MCP 服务；Java Gateway 汇总数据层、Agent API 与 RAG Build API 状态。
+两个 MCP 服务；Java Gateway 汇总数据层、Agent API 与 RAG Build API 状态；前端
+readiness 再代理 Java Gateway 的 readiness，因此统一入口健康即代表完整链路可用。
+
+用户级模型、人设和模型可调用工具由 Java 保存。`AGENT_MODEL` 是默认模型；可在
+项目根目录 `.env` 中用逗号分隔配置 `AGENT_ALLOWED_MODELS`、
+`AGENT_AVAILABLE_TOOLS` 和 `AGENT_DEFAULT_ENABLED_TOOLS`。模型 API Key 仍只存在于
+服务端环境变量中，不通过用户配置保存。
 
 统一查看最终状态：
 
@@ -99,7 +108,7 @@ MySQL、Milvus 和 Neo4j 的宿主机端口均绑定到 `127.0.0.1`，具体端�
 ./deploy/app.sh test-integration
 ```
 
-测试脚本使用固定 Compose 项目名 `pdf-learning-it` 和独立端口、collection、数据卷，
+测试脚本使用固定 Compose 项目名 `learning-assistant-it` 和独立端口、collection、数据卷，
 自动完成以下步骤：
 
 1. 启动真实 MySQL、Milvus、Neo4j、Qdrant。
@@ -107,7 +116,7 @@ MySQL、Milvus 和 Neo4j 的宿主机端口均绑定到 `127.0.0.1`，具体端�
 3. 通过 Maven Failsafe 运行 `RealDataStoresIT`。
 4. 验证四个存储 readiness、RAG 写入/检索/图扩展、Memory 写入/检索/删除，以及
    两个用户之间的查询隔离。
-5. 测试结束后删除 `pdf-learning-it` 容器和数据卷。
+5. 测试结束后删除 `learning-assistant-it` 容器和数据卷。
 
 调试失败现场时可保留测试环境：
 
@@ -116,7 +125,7 @@ KEEP_INTEGRATION_DATA=1 ./deploy/test-integration.sh
 ```
 
 测试环境使用 [`.env.integration`](.env.integration) 中的非生产凭据。脚本在每条
-Compose 命令上显式指定 `--project-name pdf-learning-it`，不会操作开发项目的数据卷。
+Compose 命令上显式指定 `--project-name learning-assistant-it`，不会操作开发项目的数据卷。
 
 ## 数据初始化
 
@@ -125,6 +134,9 @@ Compose 命令上显式指定 `--project-name pdf-learning-it`，不会操作开
 - Neo4j 初始化用户范围唯一约束。
 - 本地 Qdrant 由 `local-qdrant` profile 启动并自动建立 collection 与 payload index；
   该 profile 默认只用于集成测试。
+
+项目改名后使用新的 Compose 项目名和开发数据库名，改名前的开发数据卷不会自动迁入；
+按当前开发数据可删除的约定重新初始化即可。
 
 embedding 维度改变后必须使用新的 Milvus 和 Qdrant collection 名，不能把不同维度
 的向量写入同一个 collection。

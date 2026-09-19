@@ -117,7 +117,7 @@ PYTHON_AGENT_BASE_URL=http://127.0.0.1:8800
 PYTHON_RAG_BASE_URL=http://127.0.0.1:8803
 PYTHON_INTERNAL_TOKEN=<与 Python 服务相同的内部 token>
 USER_TOKEN_TTL_HOURS=168
-RAG_ALLOWED_ROOT=/srv/pdf-learning/uploads
+RAG_ALLOWED_ROOT=/srv/learning-assistant/uploads
 RAG_BUILD_TIMEOUT_SECONDS=1800
 RAG_MCP_TIMEOUT=30
 MEMORY_MCP_TIMEOUT=90
@@ -143,7 +143,7 @@ java -jar Interface/target/agent-interface-0.1.0-SNAPSHOT.jar
 
 # 面向前端的统一网关（用户接口与 Agent 接口使用同一端口）
 java -cp Interface/target/agent-interface-0.1.0-SNAPSHOT.jar \
-  com.pdflearning.backend.interfaceapi.AgentGatewayServer
+  com.learningassistant.backend.interfaceapi.AgentGatewayServer
 ```
 
 User 模块的普通 jar 供 Interface 编译依赖，独立服务使用

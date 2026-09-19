@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { isMockApi } from '@/api'
+import { useEffect, useState } from 'react'
+import { api, isMockApi } from '@/api'
+import type { AgentSettings } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
 import { IconCheck, IconSettings, IconSparkles, IconUser } from '@/components/Icons'
 
@@ -168,6 +169,136 @@ function PasswordSection() {
   )
 }
 
+function AgentSection() {
+  const [settings, setSettings] = useState<AgentSettings | null>(null)
+  const [model, setModel] = useState('')
+  const [persona, setPersona] = useState('')
+  const [enabledTools, setEnabledTools] = useState<string[]>([])
+  const [status, setStatus] = useState<'loading' | 'idle' | 'saving' | 'saved' | 'error'>('loading')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    api.getAgentSettings()
+      .then((value) => {
+        if (!active) return
+        setSettings(value)
+        setModel(value.model)
+        setPersona(value.persona)
+        setEnabledTools(value.enabledTools)
+        setStatus('idle')
+      })
+      .catch((reason: unknown) => {
+        if (!active) return
+        setError(reason instanceof Error ? reason.message : '读取智能体配置失败')
+        setStatus('error')
+      })
+    return () => { active = false }
+  }, [])
+
+  const toggleTool = (name: string) => {
+    setEnabledTools((current) => current.includes(name)
+      ? current.filter((item) => item !== name)
+      : [...current, name])
+  }
+
+  const save = async () => {
+    setStatus('saving')
+    setError('')
+    try {
+      const value = await api.updateAgentSettings({
+        model,
+        persona,
+        enabled_tools: enabledTools,
+      })
+      setSettings(value)
+      setModel(value.model)
+      setPersona(value.persona)
+      setEnabledTools(value.enabledTools)
+      setStatus('saved')
+      setTimeout(() => setStatus('idle'), 2000)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '保存智能体配置失败')
+      setStatus('error')
+    }
+  }
+
+  return (
+    <SectionCard
+      title="智能体老师"
+      description="为你的会话选择模型、教学风格和模型可以主动调用的工具"
+    >
+      {status === 'loading' ? (
+        <p className="text-sm text-slate-500">正在读取配置…</p>
+      ) : settings ? (
+        <div className="grid gap-4">
+          <label>
+            <span className="mb-1 block text-xs font-medium text-slate-500">模型</span>
+            <select
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+            >
+              {settings.availableModels.map((name) => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="mb-1 block text-xs font-medium text-slate-500">
+              教学人设与偏好
+            </span>
+            <textarea
+              value={persona}
+              onChange={(event) => setPersona(event.target.value)}
+              maxLength={2000}
+              rows={4}
+              placeholder="例如：讲解时先给直观例子，再给严格定义；默认使用中文。"
+              className="w-full resize-y rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+            />
+            <span className="mt-1 block text-right text-xs text-slate-400">
+              {persona.length}/2000
+            </span>
+          </label>
+          <fieldset>
+            <legend className="mb-2 text-xs font-medium text-slate-500">可调用工具</legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {settings.availableTools.map((tool) => (
+                <label
+                  key={tool.name}
+                  className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700"
+                >
+                  <input
+                    type="checkbox"
+                    checked={enabledTools.includes(tool.name)}
+                    onChange={() => toggleTool(tool.name)}
+                    className="h-4 w-4 rounded border-slate-300 text-brand-600"
+                  />
+                  {tool.label}
+                </label>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-slate-400">
+              相关记忆仍由上下文系统自动召回；这里控制模型能主动发起的工具调用。
+            </p>
+          </fieldset>
+          {error && <p className="text-xs text-rose-500">{error}</p>}
+          <button
+            type="button"
+            onClick={save}
+            disabled={status === 'saving'}
+            className="w-fit rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+          >
+            {status === 'saved' ? '已保存' : status === 'saving' ? '保存中…' : '保存智能体配置'}
+          </button>
+        </div>
+      ) : (
+        <p className="text-sm text-rose-500">{error || '智能体配置不可用'}</p>
+      )}
+    </SectionCard>
+  )
+}
+
 function AboutSection() {
   return (
     <SectionCard
@@ -182,7 +313,7 @@ function AboutSection() {
         <li className="flex items-start gap-2.5">
           <IconSparkles className="mt-0.5 h-4 w-4 shrink-0 text-brand-500" />
           <span>
-            <strong className="font-medium text-slate-800">智能体老师</strong>
+            <strong className="font-medium text-slate-800">LearningAssistant</strong>
             ：Java 负责用户、鉴权与会话归属；Python AgentLoop 负责上下文管理、
             工具调用与流式回答
           </span>
@@ -213,6 +344,7 @@ export default function SettingsPage() {
       <div className="mx-auto max-w-2xl space-y-6 px-4 py-8">
         <h2 className="text-xl font-bold text-slate-900">设置</h2>
         <ProfileSection />
+        <AgentSection />
         <PasswordSection />
         <AboutSection />
       </div>

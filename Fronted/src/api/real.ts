@@ -9,6 +9,7 @@
 
 import type {
   AuthResult,
+  AgentSettings,
   ChangePasswordRequest,
   ChatMessage,
   CompactResult,
@@ -17,6 +18,7 @@ import type {
   RegisterRequest,
   SessionInfo,
   UpdateProfileRequest,
+  UpdateAgentSettingsRequest,
   User,
 } from './types'
 import type {
@@ -167,6 +169,17 @@ export function createRealApiClient(): ApiClient {
     async changePassword(req: ChangePasswordRequest): Promise<void> {
       await request('/users/me/password', {
         method: 'POST',
+        body: JSON.stringify(req),
+      })
+    },
+
+    async getAgentSettings(): Promise<AgentSettings> {
+      return request('/agent/settings')
+    },
+
+    async updateAgentSettings(req: UpdateAgentSettingsRequest): Promise<AgentSettings> {
+      return request('/agent/settings', {
+        method: 'PUT',
         body: JSON.stringify(req),
       })
     },

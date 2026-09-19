@@ -26,6 +26,15 @@ type Document = {
   readyAt?: string
 }
 
+type AgentSettings = {
+  model: string
+  persona: string
+  enabledTools: string[]
+  availableModels: string[]
+  availableTools: { name: string; label: string }[]
+  updatedAt: string | null
+}
+
 export type CapturedRequest = {
   method: string
   path: string
@@ -38,6 +47,7 @@ export type FakeGateway = {
   user: User
   sessions: Session[]
   documents: Document[]
+  agentSettings: AgentSettings
   requests: CapturedRequest[]
 }
 
@@ -54,6 +64,22 @@ export async function installFakeGateway(page: Page): Promise<FakeGateway> {
     },
     sessions: [],
     documents: [],
+    agentSettings: {
+      model: 'glm-4.7',
+      persona: '',
+      enabledTools: [
+        'rag__rag_search',
+        'memory__memory_store',
+        'memory__memory_forget',
+      ],
+      availableModels: ['glm-4.7'],
+      availableTools: [
+        { name: 'rag__rag_search', label: '知识库检索' },
+        { name: 'memory__memory_store', label: '保存记忆' },
+        { name: 'memory__memory_forget', label: '删除记忆' },
+      ],
+      updatedAt: null,
+    },
     requests: [],
   }
 
@@ -96,6 +122,26 @@ export async function installFakeGateway(page: Page): Promise<FakeGateway> {
     }
     if (path === '/users/me/password' && request.method() === 'POST') {
       await route.fulfill({ status: 204 })
+      return
+    }
+    if (path === '/agent/settings' && request.method() === 'GET') {
+      await json(route, state.agentSettings)
+      return
+    }
+    if (path === '/agent/settings' && request.method() === 'PUT') {
+      const body = request.postDataJSON() as {
+        model: string
+        persona: string
+        enabled_tools: string[]
+      }
+      state.agentSettings = {
+        ...state.agentSettings,
+        model: body.model,
+        persona: body.persona,
+        enabledTools: body.enabled_tools,
+        updatedAt: NOW,
+      }
+      await json(route, state.agentSettings)
       return
     }
 
@@ -209,7 +255,7 @@ export async function installFakeGateway(page: Page): Promise<FakeGateway> {
 
 export async function authenticate(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    localStorage.setItem('pdflearning.token', 'e2e-token')
+    localStorage.setItem('learningassistant.token', 'e2e-token')
   })
 }
 

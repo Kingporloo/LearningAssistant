@@ -41,7 +41,8 @@ async def call_model(
         "payload": {
             "model_step": model_step,
             "input_tokens": context_result.input_tokens,
-            "tools_enabled": not state["tools_disabled"],
+            "tools_enabled": bool(runtime.context.tools)
+            and not state["tools_disabled"],
         },
     })
 

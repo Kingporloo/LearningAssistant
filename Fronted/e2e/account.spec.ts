@@ -25,4 +25,20 @@ test('受保护页面跳转登录，注册后进入个人学习空间', async ({
   expect(
     gateway.requests.find((request) => request.path === '/sessions')?.authorization,
   ).toBe('Bearer e2e-token')
+
+  await page.goto('/settings')
+  await expect(page.getByRole('heading', { name: '设置' })).toBeVisible()
+  await page.getByLabel('教学人设与偏好').fill('先举例，再解释定义')
+  await page.getByLabel('删除记忆').uncheck()
+  await page.getByRole('button', { name: '保存智能体配置' }).click()
+  await expect(page.getByRole('button', { name: '已保存' })).toBeVisible()
+
+  const settings = gateway.requests.find(
+    (request) => request.path === '/agent/settings' && request.method === 'PUT',
+  )
+  expect(JSON.parse(settings?.body ?? '{}')).toEqual({
+    model: 'glm-4.7',
+    persona: '先举例，再解释定义',
+    enabled_tools: ['rag__rag_search', 'memory__memory_store'],
+  })
 })

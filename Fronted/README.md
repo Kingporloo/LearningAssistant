@@ -1,4 +1,4 @@
-# React + TypeScript + Vite
+# LearningAssistant 前端
 
 ## 后端接口配置
 
@@ -7,9 +7,15 @@
 浏览器内 Mock 数据。
 
 当前本地网关地址为 `http://127.0.0.1:8082`。它统一提供用户、会话、Agent 和
-RAG 文档接口。文档页把 PDF、Markdown 或 TXT 原始字节提交给该网关，并轮询
+RAG 文档接口。文档页把 PDF、Markdown、TXT 等学习资料的原始字节提交给该网关，并轮询
 Java 保存的转换和建库状态。真实聊天请求会把前端创建的 `request_id` 和
 `message_id` 一并发送，用于 Java 运行幂等和消息关联。
+
+设置页通过 `GET/PUT /agent/settings` 管理当前用户的模型、教学人设和模型可主动
+调用的工具。可选范围由 Java 服务端环境变量限定，模型凭据不会发送到浏览器。
+
+统一部署由 `deploy/app.sh up` 完成，Nginx 提供前端静态文件并把同源 `/api`
+转发到 Java 网关；默认浏览器入口为 `http://127.0.0.1:8088`。
 
 ## 浏览器端到端测试
 

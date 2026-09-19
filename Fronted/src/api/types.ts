@@ -40,6 +40,26 @@ export interface ChangePasswordRequest {
   newPassword: string
 }
 
+export interface AgentToolOption {
+  name: string
+  label: string
+}
+
+export interface AgentSettings {
+  model: string
+  persona: string
+  enabledTools: string[]
+  availableModels: string[]
+  availableTools: AgentToolOption[]
+  updatedAt: string | null
+}
+
+export interface UpdateAgentSettingsRequest {
+  model: string
+  persona: string
+  enabled_tools: string[]
+}
+
 // ============ 会话 ============
 
 export interface SessionInfo {

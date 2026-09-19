@@ -168,6 +168,19 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+CREATE TABLE IF NOT EXISTS user_agent_config (
+    user_id VARCHAR(64) NOT NULL,
+    model_name VARCHAR(128) NOT NULL,
+    persona VARCHAR(2000) NOT NULL DEFAULT '',
+    enabled_tools_json JSON NOT NULL,
+    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+        ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (user_id),
+    CONSTRAINT fk_user_agent_config_user
+        FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 CREATE TABLE IF NOT EXISTS user_login_token (
     token_hash CHAR(64) NOT NULL PRIMARY KEY,
     user_id VARCHAR(64) NOT NULL,

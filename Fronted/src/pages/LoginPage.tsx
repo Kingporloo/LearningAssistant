@@ -34,7 +34,7 @@ export default function LoginPage() {
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-lg shadow-brand-200">
             <IconSparkles className="h-7 w-7" />
           </div>
-          <h1 className="mt-4 text-2xl font-bold text-slate-900">智能体老师</h1>
+          <h1 className="mt-4 text-2xl font-bold text-slate-900">LearningAssistant</h1>
           <p className="mt-1 text-sm text-slate-500">登录你的个人学习空间</p>
         </div>
 
