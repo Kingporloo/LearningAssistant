@@ -251,21 +251,3 @@ MySQL 初始化脚本只在全新的数据卷上执行。开发阶段若数据�
 状态。连接中断会保留已产生的事件和可能已经发生的工具操作，不自动重试写工具。
 
 完整接口契约和内部服务说明见 [Backend Interface 文档](backend/Interface/README.md)。
-
-## 设计文档
-
-- [系统总体实施方案](docs/agent-system-implementation-plan.md)
-- [上下文管理系统设计](docs/智能体上下文管理系统设计方案.md)
-- [AgentLoop 编排设计](docs/AgentLoop编排设计方案.md)
-- [智能体老师系统提示词](docs/智能体老师系统提示词设计.md)
-- [RAG 异构文档解析与分块方案](docs/RAG异构文档解析与分块方案.md)
-- [DataPort 存储边界](backend/DataPort/README.md)
-- [部署与运行](deploy/README.md)
-
-## 当前边界
-
-- 当前部署按每个服务单实例运行，不包含多节点调度、分布式锁和任务队列集群。
-- 用户不能自行安装任意 MCP 服务；可用工具由服务端白名单和用户设置共同决定。
-- RAG 文档、聊天记录和长期记忆分别通过各自的数据接口管理，
-  `memory_forget` 只删除长期记忆。
-- 默认使用 Qdrant Cloud；本地基础设施仍包括 MySQL、Milvus、Neo4j、etcd 和 MinIO。
