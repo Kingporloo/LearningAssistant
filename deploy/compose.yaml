@@ -41,16 +41,18 @@ services:
     networks: [database]
 
   milvus-minio:
-    image: quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.minio
     restart: unless-stopped
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    command: minio server /minio_data --console-address ":9001"
+    command: ["minio", "server", "/minio_data", "--console-address", ":9001"]
     volumes:
       - milvus-minio-data:/minio_data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
       interval: 30s
       timeout: 20s
       retries: 3
