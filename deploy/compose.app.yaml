@@ -29,8 +29,9 @@ x-java: &java
     MYSQL_JDBC_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=utf8
     MILVUS_URL: http://milvus:19530
     NEO4J_URI: bolt://neo4j:7687
+    QDRANT_URL: http://qdrant:6333
     RAG_ALLOWED_ROOT: /data/uploads
-    NO_PROXY: 127.0.0.1,localhost,mysql,milvus,neo4j,java-storage,agent-api,rag-build-api
+    NO_PROXY: 127.0.0.1,localhost,mysql,milvus,neo4j,qdrant,java-storage,agent-api,rag-build-api
   networks: [database, application]
   stop_grace_period: 30s
 
@@ -48,6 +49,8 @@ services:
       milvus-init:
         condition: service_completed_successfully
       neo4j-init:
+        condition: service_completed_successfully
+      qdrant-init:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health/ready"]
@@ -95,6 +98,7 @@ services:
     command: ["uvicorn", "Agent.Interface.AgentAPI:app", "--host", "0.0.0.0", "--port", "8800"]
     environment:
       <<: *python-environment
+      RAG_MCP_TIMEOUT: ${RAG_MCP_TIMEOUT:-120}
     depends_on:
       rag-mcp:
         condition: service_healthy

@@ -2,8 +2,7 @@
 
 项目使用 Docker Compose 统一运行数据库、4 个 Python 服务、2 个 Java 服务，
 以及由 Nginx 托管的前端。Compose 负责启动顺序、应用健康检查、日志收集和异常
-退出后的自动重启。生产环境默认连接 Qdrant Cloud；真实集成测试使用隔离的本地
-Qdrant。
+退出后的自动重启。Qdrant 也由 Compose 在本机运行，并使用独立数据卷持久化。
 
 ## 首次配置
 
@@ -14,8 +13,8 @@ Qdrant。
 cp deploy/.env.example deploy/.env
 ```
 
-至少替换示例中的 MySQL、MinIO、Neo4j 密码，三个内部 token，以及
-`QDRANT_URL`、`QDRANT_API_KEY`。Qdrant collection 使用 768 维 COSINE，并为
+至少替换示例中的 MySQL、MinIO、Neo4j 密码和三个内部 token。
+Qdrant collection 使用 768 维 COSINE，并为
 `user_id`、`memory_id`、`memory_type`、`status` 建立 keyword payload index。
 
 应用容器共享 `uploads-data` volume。Java 网关把用户文件写入 `/data/uploads`，
@@ -35,7 +34,7 @@ Java 网关，SSE 响应关闭代理缓冲。需要修改浏览器入口端口�
 应用启动顺序为：
 
 ```text
-MySQL / Milvus / Neo4j
+MySQL / Milvus / Neo4j / Qdrant
         ↓
 Java Storage
         ↓
@@ -99,7 +98,7 @@ readiness 返回 503 时，响应中的 `components` 会标出不可用组件。
 docker compose --env-file deploy/.env -f deploy/compose.yaml up -d
 ```
 
-MySQL、Milvus 和 Neo4j 的宿主机端口均绑定到 `127.0.0.1`，具体端口由
+MySQL、Milvus、Neo4j 和 Qdrant 的宿主机端口均绑定到 `127.0.0.1`，具体端口由
 `deploy/.env` 配置。etcd 和 MinIO 只在数据库网络内开放。
 
 ## 真实数据存储集成测试
@@ -132,8 +131,7 @@ Compose 命令上显式指定 `--project-name learning-assistant-it`，不会操
 - MySQL 首次创建数据卷时执行 `mysql-schema.sql`。
 - Milvus 初始化配置的 RAG collection 和 COSINE 索引。
 - Neo4j 初始化用户范围唯一约束。
-- 本地 Qdrant 由 `local-qdrant` profile 启动并自动建立 collection 与 payload index；
-  该 profile 默认只用于集成测试。
+- 本地 Qdrant 启动后自动建立 collection 与 payload index。
 
 项目改名后使用新的 Compose 项目名和开发数据库名，改名前的开发数据卷不会自动迁入；
 按当前开发数据可删除的约定重新初始化即可。

@@ -108,6 +108,7 @@ final class AgentRunCoordinator {
     private void execute(HttpExchange exchange, AgentRunRequest request) {
         var transcript = new AgentRunTranscript(mapper);
         var response = http.sse(exchange);
+        var heartbeat = startHeartbeat(response);
         try {
             var result = runService.execute(request, event -> {
                 transcript.accept(event);
@@ -145,7 +146,24 @@ final class AgentRunCoordinator {
         } catch (RuntimeException exception) {
             persistFailure(transcript, request, "agent_run_failed", "Agent 运行失败");
             failResponse(response, exchange, 500, "Agent 运行失败");
+        } finally {
+            heartbeat.interrupt();
         }
+    }
+
+    private static Thread startHeartbeat(AgentGatewayHttp.SseResponse response) {
+        return Thread.ofVirtual().name("agent-sse-heartbeat").start(() -> {
+            try {
+                while (!Thread.currentThread().isInterrupted()) {
+                    Thread.sleep(5_000);
+                    response.heartbeat();
+                }
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+            } catch (UncheckedIOException ignored) {
+                // 客户端已断开时，主运行线程会在下一次写事件时处理失败。
+            }
+        });
     }
 
     private ReentrantLock lock(String sessionId) {

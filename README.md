@@ -138,7 +138,6 @@ MCP 协议与服务暴露，`Agent/Interface` 只处理 Agent 与 Java 之间的
 - Linux 或兼容的 Docker 主机
 - Docker Engine 和 Docker Compose Plugin
 - 可用的 OpenAI 兼容模型接口
-- 可用的 Qdrant Cloud 实例
 - 建议至少 8 GiB 内存
 
 统一部署会在容器中构建 Python、Java 21 和前端，不要求宿主机预先安装 Maven、JDK、
@@ -172,7 +171,7 @@ cp deploy/.env.example deploy/.env
 
 - MySQL、MinIO 和 Neo4j 密码；
 - `JAVA_INTERNAL_TOKEN`、`PYTHON_INTERNAL_TOKEN` 和 `MCP_INTERNAL_TOKEN`；
-- `QDRANT_URL`、`QDRANT_API_KEY` 和 collection 名；
+- Qdrant 的宿主机端口和 collection 名；
 - 对外端口、允许来源和上下文预算（需要调整时）。
 
 embedding 模型、Milvus collection 与 Qdrant collection 的向量维度必须一致。默认

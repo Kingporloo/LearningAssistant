@@ -141,11 +141,11 @@ final class AgentGatewayHttp {
             this.mapper = mapper;
         }
 
-        boolean started() {
+        synchronized boolean started() {
             return started;
         }
 
-        void write(AgentEvent event) {
+        synchronized void write(AgentEvent event) {
             if (closed) {
                 throw new UncheckedIOException(new IOException("SSE 响应已关闭"));
             }
@@ -166,7 +166,19 @@ final class AgentGatewayHttp {
             }
         }
 
-        void close() {
+        synchronized void heartbeat() {
+            if (!started || closed) {
+                return;
+            }
+            try {
+                exchange.getResponseBody().write(": keep-alive\n\n".getBytes(StandardCharsets.UTF_8));
+                exchange.getResponseBody().flush();
+            } catch (IOException exception) {
+                throw new UncheckedIOException(exception);
+            }
+        }
+
+        synchronized void close() {
             if (!closed) {
                 closed = true;
                 exchange.close();

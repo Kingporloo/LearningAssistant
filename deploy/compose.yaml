@@ -137,7 +137,6 @@ services:
 
   qdrant:
     image: qdrant/qdrant:v1.15.4
-    profiles: ["local-qdrant"]
     restart: unless-stopped
     volumes:
       - qdrant-data:/qdrant/storage
@@ -147,7 +146,6 @@ services:
 
   qdrant-init:
     image: curlimages/curl:8.12.1
-    profiles: ["local-qdrant"]
     environment:
       QDRANT_MEMORY_COLLECTION: ${QDRANT_MEMORY_COLLECTION}
       EMBEDDING_VECTOR_DIMENSION: ${EMBEDDING_VECTOR_DIMENSION:-768}
