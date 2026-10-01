@@ -77,6 +77,7 @@ export default function ChatPage() {
   const stop = useChatStore((s) => s.stop)
 
   const createSession = useSessionsStore((s) => s.create)
+  const setFirstMessageTitle = useSessionsStore((s) => s.setFirstMessageTitle)
   const loadSessions = useSessionsStore((s) => s.load)
   const loadDocuments = useDocumentsStore((s) => s.load)
   const [compactFeedback, setCompactFeedback] = useState<{
@@ -101,10 +102,18 @@ export default function ChatPage() {
         targetId = session.id
         navigate(`/chat/${session.id}`, { replace: true })
       }
+      setFirstMessageTitle(targetId, content)
       await send(targetId, content)
       void loadSessions(true)
     },
-    [sessionId, createSession, send, navigate, loadSessions],
+    [
+      sessionId,
+      createSession,
+      setFirstMessageTitle,
+      send,
+      navigate,
+      loadSessions,
+    ],
   )
 
   const list = sessionId ? messages ?? [] : []

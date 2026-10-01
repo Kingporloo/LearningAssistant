@@ -36,6 +36,21 @@ class ChatDataPortTest {
     }
 
     @Test
+    void displaysFirstQuestionForLegacyDefaultTitle() {
+        var port = createDatabase().port();
+        var now = OffsetDateTime.parse("2026-09-12T03:00:00Z");
+
+        port.saveUserMessage(
+                "user_a", "session_1", "新会话", "message_1", "request_1",
+                "第一条查询问题", now);
+        port.saveUserMessage(
+                "user_a", "session_1", "新会话", "message_2", "request_2",
+                "后续问题", now.plusMinutes(1));
+
+        assertEquals("第一条查询问题", port.listSessions("user_a").getFirst().title());
+    }
+
+    @Test
     void returnsOnlyCompletedDialogueAfterSummaryCursor() {
         var port = createDatabase().port();
         var first = OffsetDateTime.parse("2026-09-12T03:00:00Z");

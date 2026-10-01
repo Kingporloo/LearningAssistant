@@ -79,6 +79,12 @@ class AgentGatewayHandlerTest {
                     .orElse("").startsWith("text/event-stream"));
             assertTrue(runResponse.body().contains("event: message_completed"));
 
+            var sessionsAfterFirstQuestion = send(
+                    base.resolve("/sessions"), "GET", firstAuth.token(), null);
+            assertEquals(
+                    "请解释注意力机制",
+                    mapper.readTree(sessionsAfterFirstQuestion.body()).get(0).path("title").asText());
+
             var secondRun = send(
                     base.resolve("/sessions/" + sessionId + "/runs"),
                     "POST",

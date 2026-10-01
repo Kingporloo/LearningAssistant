@@ -8,7 +8,13 @@ interface SessionsState {
   loaded: boolean
   load: (force?: boolean) => Promise<void>
   create: (title?: string) => Promise<SessionInfo>
+  setFirstMessageTitle: (sessionId: string, message: string) => void
   remove: (sessionId: string) => Promise<void>
+}
+
+function firstMessageTitle(message: string): string {
+  const title = message.trim().replace(/\s+/g, ' ')
+  return title.length <= 100 ? title : `${title.slice(0, 99)}…`
 }
 
 export const useSessionsStore = create<SessionsState>((set, get) => ({
@@ -32,6 +38,18 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     const session = await api.createSession(title)
     set({ sessions: [session, ...get().sessions] })
     return session
+  },
+
+  setFirstMessageTitle(sessionId, message) {
+    set({
+      sessions: get().sessions.map((session) =>
+        session.id === sessionId
+          && session.title === '新会话'
+          && session.messageCount === 0
+          ? { ...session, title: firstMessageTitle(message) }
+          : session,
+      ),
+    })
   },
 
   async remove(sessionId) {

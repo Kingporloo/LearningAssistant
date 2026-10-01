@@ -14,6 +14,9 @@ import java.util.regex.Pattern;
 
 /** 空会话、正式归属和前端会话视图的生命周期编排。 */
 final class AgentSessionService {
+    private static final String DEFAULT_TITLE = "新会话";
+    private static final int MAX_TITLE_LENGTH = 100;
+
     private final ChatDataPort chats;
     private final AgentControlClient controlClient;
     private final ObjectMapper mapper;
@@ -81,10 +84,11 @@ final class AgentSessionService {
         return result;
     }
 
-    String title(String userId, String sessionId) {
+    String title(String userId, String sessionId, String firstMessage) {
         var pendingSession = pending.findOwned(userId, sessionId);
         if (pendingSession.isPresent()) {
-            return pendingSession.get().title();
+            String title = pendingSession.get().title();
+            return DEFAULT_TITLE.equals(title) ? firstMessageTitle(firstMessage) : title;
         }
         return requireStored(userId, sessionId).title();
     }
@@ -149,6 +153,13 @@ final class AgentSessionService {
             throw new AgentGatewayException(502, "Python Agent 返回了无效的 session_id");
         }
         return value;
+    }
+
+    private static String firstMessageTitle(String message) {
+        String title = message.strip().replaceAll("\\s+", " ");
+        return title.length() <= MAX_TITLE_LENGTH
+                ? title
+                : title.substring(0, MAX_TITLE_LENGTH - 1) + "…";
     }
 
     private static void putIfPresent(ObjectNode target, String name, JsonNode value) {

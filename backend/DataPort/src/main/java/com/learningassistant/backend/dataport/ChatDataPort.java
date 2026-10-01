@@ -109,7 +109,18 @@ public final class ChatDataPort {
         requireText(userId, "user_id");
         try (var connection = dataSource.getConnection();
                 var statement = connection.prepareStatement("""
-                        SELECT s.session_id, s.user_id, s.title, s.status,
+                        SELECT s.session_id, s.user_id,
+                               CASE WHEN s.title = '新会话' THEN COALESCE(
+                                   (SELECT SUBSTRING(m.content, 1, 100)
+                                    FROM chat_message m
+                                    WHERE m.user_id = s.user_id
+                                      AND m.session_id = s.session_id
+                                      AND m.role = 'user'
+                                    ORDER BY m.created_at, m.message_id
+                                    LIMIT 1),
+                                   s.title)
+                               ELSE s.title END AS title,
+                               s.status,
                                s.created_at, s.updated_at,
                                (SELECT COUNT(*) FROM chat_message m
                                 WHERE m.user_id = s.user_id

@@ -184,7 +184,17 @@ export async function installFakeGateway(page: Page): Promise<FakeGateway> {
       const body = request.postDataJSON() as {
         request_id: string
         message_id: string
+        message: string
       }
+      state.sessions = state.sessions.map((session) =>
+        session.messageCount === 0 && session.title === '新会话'
+          ? {
+              ...session,
+              title: body.message.trim().replace(/\s+/g, ' ').slice(0, 100),
+              messageCount: 2,
+            }
+          : session,
+      )
       await route.fulfill({
         status: 200,
         contentType: 'text/event-stream; charset=utf-8',

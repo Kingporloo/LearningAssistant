@@ -53,7 +53,7 @@ final class AgentRunCoordinator {
             String requestId,
             String messageId,
             String message) {
-        String title = sessions.title(userId, sessionId);
+        String title = sessions.title(userId, sessionId, message);
         var lock = lock(sessionId);
         String activeRunKey = activeRunKey(userId, requestId);
         var activeRun = new ActiveRun(sessionId, Thread.currentThread());

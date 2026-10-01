@@ -18,12 +18,13 @@ test('创建会话、消费 Agent SSE、展示工具结果并手动压缩', asyn
   await page.getByPlaceholder(/输入你的问题/).fill(question)
   await page.getByTitle('发送').click()
 
-  await expect(page.getByText(question, { exact: true })).toBeVisible()
+  await expect(page.getByRole('main').getByText(question, { exact: true })).toBeVisible()
   await expect(page.getByText('知识库检索')).toBeVisible()
   await expect(page.getByText('注意力机制可以理解为“按相关性分配注意力”。')).toBeVisible()
   await expect(page.getByText('600 tokens')).toBeVisible()
   await expect(page.getByText('2 步推理')).toBeVisible()
   await expect(page.getByText('1 轮工具调用')).toBeVisible()
+  await expect(page.locator('aside').getByText(question, { exact: true })).toBeVisible()
 
   await page.getByText('知识库检索').click()
   await expect(page.getByText('lesson.md')).toBeVisible()
