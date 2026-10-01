@@ -52,7 +52,7 @@ export type FakeGateway = {
 }
 
 const NOW = '2026-09-18T08:00:00Z'
-const SESSION_ID = 'session_20260918_160000_user-e2e'
+export const SESSION_ID = 'session_20260918_160000_user-e2e'
 
 export async function installFakeGateway(page: Page): Promise<FakeGateway> {
   const state: FakeGateway = {
@@ -273,7 +273,7 @@ async function json(route: Route, body: unknown, status = 200): Promise<void> {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
 
-function agentEvents(requestId: string, messageId: string): string {
+export function agentEvents(requestId: string, messageId: string): string {
   const result = {
     status: 'ok',
     query: '解释注意力机制',
@@ -284,7 +284,7 @@ function agentEvents(requestId: string, messageId: string): string {
         source: 'lesson.md',
         page: 2,
         text: '注意力机制会根据查询与键的相关性，为不同信息分配权重。',
-        score: 0.94,
+        similarity: 0.94,
       },
     ],
   }

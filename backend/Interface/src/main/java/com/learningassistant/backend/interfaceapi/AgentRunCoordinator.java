@@ -8,6 +8,7 @@ import java.io.UncheckedIOException;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 
 /** 组装可信上下文、执行 Python SSE 并保存前端可见结果。 */
@@ -22,6 +23,7 @@ final class AgentRunCoordinator {
     private final AgentGatewayHttp http;
     private final ObjectMapper mapper;
     private final ConcurrentHashMap<String, ReentrantLock> sessionLocks = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ActiveRun> activeRuns = new ConcurrentHashMap<>();
 
     AgentRunCoordinator(
             ChatDataPort chats,
@@ -53,6 +55,9 @@ final class AgentRunCoordinator {
             String message) {
         String title = sessions.title(userId, sessionId);
         var lock = lock(sessionId);
+        String activeRunKey = activeRunKey(userId, requestId);
+        var activeRun = new ActiveRun(sessionId, Thread.currentThread());
+        activeRuns.put(activeRunKey, activeRun);
         try {
             var snapshot = snapshots.load(userId, sessionId);
             try {
@@ -73,7 +78,16 @@ final class AgentRunCoordinator {
                     settings.runtimeConfig(userId));
             execute(exchange, request);
         } finally {
+            activeRuns.remove(activeRunKey, activeRun);
             lock.unlock();
+        }
+    }
+
+    void cancel(String userId, String sessionId, String requestId) {
+        var active = activeRuns.get(activeRunKey(userId, requestId));
+        if (active != null && active.sessionId().equals(sessionId)) {
+            runService.cancel(userId, requestId);
+            active.thread().interrupt();
         }
     }
 
@@ -108,7 +122,8 @@ final class AgentRunCoordinator {
     private void execute(HttpExchange exchange, AgentRunRequest request) {
         var transcript = new AgentRunTranscript(mapper);
         var response = http.sse(exchange);
-        var heartbeat = startHeartbeat(response);
+        var clientConnected = new AtomicBoolean(true);
+        var heartbeat = startHeartbeat(response, clientConnected);
         try {
             var result = runService.execute(request, event -> {
                 transcript.accept(event);
@@ -116,7 +131,14 @@ final class AgentRunCoordinator {
                     chats.saveAssistantMessage(transcript.toMessage(
                             request.userId(), request.sessionId(), request.requestId(), now()));
                 }
-                response.write(event);
+                if (clientConnected.get()) {
+                    try {
+                        response.write(event);
+                    } catch (UncheckedIOException ignored) {
+                        clientConnected.set(false);
+                        response.close();
+                    }
+                }
             });
             if (result.outcome() == AgentRunService.Outcome.EXECUTED
                     || result.outcome() == AgentRunService.Outcome.REPLAYED) {
@@ -151,7 +173,9 @@ final class AgentRunCoordinator {
         }
     }
 
-    private static Thread startHeartbeat(AgentGatewayHttp.SseResponse response) {
+    private static Thread startHeartbeat(
+            AgentGatewayHttp.SseResponse response,
+            AtomicBoolean clientConnected) {
         return Thread.ofVirtual().name("agent-sse-heartbeat").start(() -> {
             try {
                 while (!Thread.currentThread().isInterrupted()) {
@@ -161,9 +185,14 @@ final class AgentRunCoordinator {
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
             } catch (UncheckedIOException ignored) {
-                // 客户端已断开时，主运行线程会在下一次写事件时处理失败。
+                clientConnected.set(false);
+                response.close();
             }
         });
+    }
+
+    private static String activeRunKey(String userId, String requestId) {
+        return userId + "\0" + requestId;
     }
 
     private ReentrantLock lock(String sessionId) {
@@ -204,5 +233,8 @@ final class AgentRunCoordinator {
 
     private static OffsetDateTime now() {
         return OffsetDateTime.now(ZoneOffset.UTC);
+    }
+
+    private record ActiveRun(String sessionId, Thread thread) {
     }
 }

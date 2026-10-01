@@ -121,6 +121,7 @@ final class AgentSessionService {
     private ObjectNode messageJson(ChatDataPort.MessageData message) {
         var value = mapper.createObjectNode();
         value.put("id", message.messageId());
+        value.put("requestId", message.requestId());
         value.put("role", message.role());
         value.put("content", message.content());
         value.put("createdAt", message.createdAt().toString());

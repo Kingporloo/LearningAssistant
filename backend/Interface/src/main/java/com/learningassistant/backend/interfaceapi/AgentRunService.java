@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 /** 登记一次运行、持久化 Python SSE 事件并执行 request_id 幂等判断。 */
@@ -31,6 +32,7 @@ public final class AgentRunService {
     private final AgentSseClient agentClient;
     private final AgentRunDataPort dataPort;
     private final ObjectMapper mapper;
+    private final ConcurrentHashMap<String, AgentEventStream> activeStreams = new ConcurrentHashMap<>();
 
     public AgentRunService(
             AgentSseClient agentClient,
@@ -80,8 +82,16 @@ public final class AgentRunService {
             AgentRunRequest request,
             AgentRunDataPort.RunClaim claim,
             Consumer<AgentEvent> consumer) throws IOException, InterruptedException {
+        String activeStreamKey = activeStreamKey(request.userId(), request.requestId());
         try (var stream = agentClient.openRun(request)) {
+            activeStreams.put(activeStreamKey, stream);
+            if (Thread.currentThread().isInterrupted()) {
+                throw new InterruptedException("Agent 运行已取消");
+            }
             stream.consume(event -> persistAndForward(request, event, consumer));
+            if (Thread.currentThread().isInterrupted()) {
+                throw new InterruptedException("Agent 运行已取消");
+            }
         } catch (InterruptedException exception) {
             markInterrupted(request, exception);
             Thread.currentThread().interrupt();
@@ -89,6 +99,8 @@ public final class AgentRunService {
         } catch (IOException | RuntimeException exception) {
             markInterrupted(request, exception);
             throw exception;
+        } finally {
+            activeStreams.remove(activeStreamKey);
         }
 
         var finished = dataPort.findRun(request.userId(), request.requestId())
@@ -100,6 +112,18 @@ public final class AgentRunService {
             throw exception;
         }
         return new RunResult(Outcome.EXECUTED, finished, claim.activeRequestId());
+    }
+
+    void cancel(String userId, String requestId) {
+        var stream = activeStreams.get(activeStreamKey(userId, requestId));
+        if (stream == null) {
+            return;
+        }
+        try {
+            stream.close();
+        } catch (IOException ignored) {
+            // 关闭动作已经发出，运行线程会负责记录最终状态。
+        }
     }
 
     private RunResult replay(
@@ -180,6 +204,10 @@ public final class AgentRunService {
             Outcome outcome,
             AgentRunDataPort.RunClaim claim) {
         return new RunResult(outcome, claim.run(), claim.activeRequestId());
+    }
+
+    private static String activeStreamKey(String userId, String requestId) {
+        return userId + "\0" + requestId;
     }
 
     private static String sha256(byte[] value) {

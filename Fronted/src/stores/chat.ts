@@ -23,6 +23,13 @@ interface ChatState {
   currentHandle: ChatRunHandle | null
   loadHistory: (sessionId: string, force?: boolean) => Promise<void>
   send: (sessionId: string, content: string) => Promise<void>
+  continueRun: (
+    sessionId: string,
+    requestId: string,
+    messageId: string,
+    message: string,
+    assistantId: string,
+  ) => Promise<void>
   stop: () => void
   clearSession: (sessionId: string) => void
 }
@@ -149,6 +156,42 @@ export const useChatStore = create<ChatState>((set, get) => ({
         messagesBySession: { ...get().messagesBySession, [sessionId]: messages },
         loadedSessions: loaded,
       })
+
+      const answered = new Set(
+        messages
+          .filter((message) => message.role === 'assistant' && message.requestId)
+          .map((message) => message.requestId),
+      )
+      const pending = messages.findLast(
+        (message) => message.role === 'user'
+          && message.requestId
+          && !answered.has(message.requestId),
+      )
+      if (pending?.requestId && !get().streamingSessionId) {
+        const assistantId = `assistant_${pending.requestId}`
+        const assistantMessage: AssistantMessage = {
+          id: assistantId,
+          requestId: pending.requestId,
+          role: 'assistant',
+          status: 'streaming',
+          content: '',
+          segments: [],
+          createdAt: new Date().toISOString(),
+        }
+        set({
+          messagesBySession: {
+            ...get().messagesBySession,
+            [sessionId]: [...messages, assistantMessage],
+          },
+        })
+        void get().continueRun(
+          sessionId,
+          pending.requestId,
+          pending.id,
+          pending.content,
+          assistantId,
+        )
+      }
     } finally {
       set({ loadingHistory: false })
     }
@@ -160,15 +203,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!trimmed) return
 
     const now = new Date().toISOString()
+    const requestId = crypto.randomUUID()
     const userMessage: ChatMessage = {
       id: `local_user_${now}_${Math.random().toString(36).slice(2, 6)}`,
+      requestId,
       role: 'user',
       content: trimmed,
       createdAt: now,
     }
-    const assistantId = `local_assistant_${now}_${Math.random().toString(36).slice(2, 6)}`
+    const assistantId = `assistant_${requestId}`
     const assistantMessage: AssistantMessage = {
       id: assistantId,
+      requestId,
       role: 'assistant',
       status: 'streaming',
       content: '',
@@ -185,15 +231,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
         [sessionId]: [...existing, userMessage, assistantMessage],
       },
       loadedSessions: loaded,
+    })
+
+    await get().continueRun(
+      sessionId,
+      requestId,
+      userMessage.id,
+      trimmed,
+      assistantId,
+    )
+  },
+
+  async continueRun(sessionId, requestId, messageId, message, assistantId) {
+    if (get().streamingSessionId) return
+    set({
       streamingSessionId: sessionId,
       streamingMessageId: assistantId,
     })
 
     const handle = api.runChat({
       sessionId,
-      requestId: crypto.randomUUID(),
-      messageId: userMessage.id,
-      message: trimmed,
+      requestId,
+      messageId,
+      message,
       signal: new AbortController().signal,
       onEvent: (event) => {
         const state = get()
@@ -231,7 +291,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                       status: 'failed',
                       error: {
                         code: 'network_error',
-                        message: '连接中断，请重试',
+                        message: '连接恢复失败，请刷新页面继续恢复',
                         retryable: true,
                       },
                     }

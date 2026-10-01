@@ -136,7 +136,9 @@ class AgentGatewayHandlerTest {
             var history = mapper.readTree(historyResponse.body());
             assertEquals(4, history.size());
             assertEquals("user", history.get(0).path("role").asText());
+            assertEquals("request_1", history.get(0).path("requestId").asText());
             assertEquals("assistant", history.get(1).path("role").asText());
+            assertEquals("request_1", history.get(1).path("requestId").asText());
             assertEquals("completed", history.get(1).path("status").asText());
             assertEquals("注意力会按相关性分配权重。", history.get(1).path("content").asText());
             assertEquals(

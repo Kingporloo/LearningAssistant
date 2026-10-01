@@ -29,6 +29,30 @@ import type {
 import { ApiRequestError, getToken } from './client'
 
 const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? '/api'
+const RUN_RECONNECT_DELAY_MS = 2_000
+const MAX_RUN_RECONNECT_ATTEMPTS = 150
+
+function reconnectableRunError(error: unknown): boolean {
+  if (error instanceof TypeError) return true
+  if (!(error instanceof ApiRequestError)) return false
+  return error.status >= 500 || (
+    error.status === 409 && /正在执行|已有一次运行/.test(error.message)
+  )
+}
+
+function reconnectDelay(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      window.clearTimeout(timer)
+      reject(new DOMException('已中止', 'AbortError'))
+    }
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, RUN_RECONNECT_DELAY_MS)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
 
 async function request<T>(
   path: string,
@@ -213,45 +237,83 @@ export function createRealApiClient(): ApiClient {
     runChat(params: ChatRunParams): ChatRunHandle {
       const { sessionId, requestId, messageId, message, onEvent, signal } = params
       const controller = new AbortController()
-      const onAbort = () => controller.abort()
+      let running = true
+      const cancelRemote = () => {
+        if (!running) return
+        const token = getToken()
+        void fetch(
+          `${API_BASE_URL}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(requestId)}`,
+          {
+            method: 'DELETE',
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+            keepalive: true,
+          },
+        ).catch(() => {})
+      }
+      const onAbort = () => {
+        cancelRemote()
+        controller.abort()
+      }
       signal.addEventListener('abort', onAbort, { once: true })
 
       const done = (async (): Promise<'completed' | 'failed' | 'aborted'> => {
         let outcome: 'completed' | 'failed' | 'aborted' = 'completed'
+        let lastEventSeq = 0
+        let reconnectAttempts = 0
         try {
-          const token = getToken()
-          const response = await fetch(
-            `${API_BASE_URL}/sessions/${sessionId}/runs`,
-            {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Accept: 'text/event-stream',
-                ...(token ? { Authorization: `Bearer ${token}` } : {}),
-              },
-              body: JSON.stringify({
-                message,
-                request_id: requestId,
-                message_id: messageId,
-              }),
-              signal: controller.signal,
-            },
-          )
-          if (!response.ok) {
-            let detail = `请求失败（${response.status}）`
+          for (;;) {
             try {
-              const body = (await response.json()) as { message?: string }
-              if (body.message) detail = body.message
-            } catch {
-              // 保留默认
+              const token = getToken()
+              const response = await fetch(
+                `${API_BASE_URL}/sessions/${sessionId}/runs`,
+                {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'text/event-stream',
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                  },
+                  body: JSON.stringify({
+                    message,
+                    request_id: requestId,
+                    message_id: messageId,
+                  }),
+                  signal: controller.signal,
+                },
+              )
+              if (!response.ok) {
+                let detail = `请求失败（${response.status}）`
+                try {
+                  const body = (await response.json()) as { message?: string }
+                  if (body.message) detail = body.message
+                } catch {
+                  // 保留默认
+                }
+                throw new ApiRequestError(response.status, detail)
+              }
+              await consumeSse(
+                response,
+                ({ data }) => {
+                  const event = data as Parameters<typeof onEvent>[0]
+                  if (event.event_seq <= lastEventSeq) return
+                  lastEventSeq = event.event_seq
+                  onEvent(event)
+                },
+                controller.signal,
+              )
+              break
+            } catch (error) {
+              if (controller.signal.aborted) {
+                throw new DOMException('已中止', 'AbortError')
+              }
+              if (!reconnectableRunError(error)
+                  || reconnectAttempts >= MAX_RUN_RECONNECT_ATTEMPTS) {
+                throw error
+              }
+              reconnectAttempts += 1
+              await reconnectDelay(controller.signal)
             }
-            throw new ApiRequestError(response.status, detail)
           }
-          await consumeSse(
-            response,
-            ({ data }) => onEvent(data as Parameters<typeof onEvent>[0]),
-            controller.signal,
-          )
         } catch (error) {
           if (error instanceof DOMException && error.name === 'AbortError') {
             outcome = 'aborted'
@@ -260,13 +322,14 @@ export function createRealApiClient(): ApiClient {
             throw error
           }
         } finally {
+          running = false
           signal.removeEventListener('abort', onAbort)
         }
         return outcome
       })()
 
       return {
-        abort: () => controller.abort(),
+        abort: onAbort,
         done,
       }
     },

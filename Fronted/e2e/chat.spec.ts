@@ -1,5 +1,10 @@
 import { expect, test } from '@playwright/test'
-import { authenticate, installFakeGateway } from './support/fakeGateway'
+import {
+  agentEvents,
+  authenticate,
+  installFakeGateway,
+  SESSION_ID,
+} from './support/fakeGateway'
 
 test('创建会话、消费 Agent SSE、展示工具结果并手动压缩', async ({ page }) => {
   await authenticate(page)
@@ -35,4 +40,64 @@ test('创建会话、消费 Agent SSE、展示工具结果并手动压缩', asyn
     contentType: 'application/json',
   })
   expect(JSON.parse(run?.body ?? '{}')).toMatchObject({ message: question })
+})
+
+test('刷新页面后等待原运行完成并重放结果', async ({ page }) => {
+  await authenticate(page)
+  await installFakeGateway(page)
+
+  await page.route(/\/api\/sessions\/[^/]+\/messages$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          id: 'message-recover',
+          requestId: 'request-recover',
+          role: 'user',
+          content: '恢复之前的问题',
+          createdAt: '2026-09-18T08:00:00Z',
+        },
+      ]),
+    })
+  })
+
+  let runAttempts = 0
+  await page.route(/\/api\/sessions\/[^/]+\/runs$/, async (route) => {
+    runAttempts += 1
+    const body = route.request().postDataJSON() as {
+      request_id: string
+      message_id: string
+    }
+    if (runAttempts === 1) {
+      const events = agentEvents(body.request_id, body.message_id)
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream; charset=utf-8',
+        body: events.slice(0, events.indexOf('event: tool_finished')),
+      })
+      return
+    }
+    if (runAttempts === 2) {
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({ message: '相同请求正在执行' }),
+      })
+      return
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream; charset=utf-8',
+      body: agentEvents(body.request_id, body.message_id),
+    })
+  })
+
+  await page.goto(`/chat/${SESSION_ID}`)
+
+  await expect(page.getByText('恢复之前的问题', { exact: true })).toBeVisible()
+  await expect(page.getByText('注意力机制可以理解为“按相关性分配注意力”。'))
+    .toBeVisible({ timeout: 10_000 })
+  await expect(page.getByText('知识库检索')).toHaveCount(1)
+  expect(runAttempts).toBe(3)
 })

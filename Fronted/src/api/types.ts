@@ -115,6 +115,7 @@ export interface AgentErrorInfo {
 
 export interface UserMessage {
   id: string
+  requestId?: string
   role: 'user'
   content: string
   createdAt: string
@@ -127,6 +128,7 @@ export type RunSegment =
 
 export interface AssistantMessage {
   id: string
+  requestId?: string
   role: 'assistant'
   status: 'streaming' | 'completed' | 'failed'
   /** 最终可见回答（message_completed 的 content） */
@@ -267,7 +269,9 @@ export interface RagSearchResultItem {
   source: string
   page?: number | null
   text: string
-  score: number
+  score?: number
+  similarity?: number
+  rrf_score?: number
 }
 
 export interface RagSearchResultPayload {

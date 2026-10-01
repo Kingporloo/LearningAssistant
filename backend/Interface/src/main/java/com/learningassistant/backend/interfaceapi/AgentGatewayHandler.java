@@ -154,6 +154,11 @@ final class AgentGatewayHandler {
                 && "runs".equals(parts[3])
                 && "POST".equals(method)) {
             handleRun(exchange, userId, sessionId);
+        } else if (parts.length == 5
+                && "runs".equals(parts[3])
+                && "DELETE".equals(method)) {
+            runs.cancel(userId, sessionId, requiredPublicPathId(parts[4], "request_id"));
+            http.send(exchange, 204, null);
         } else if (parts.length == 4
                 && "compact".equals(parts[3])
                 && "POST".equals(method)) {

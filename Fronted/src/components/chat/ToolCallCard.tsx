@@ -64,23 +64,30 @@ function RagResults({ result }: { result: unknown }) {
   }
   return (
     <div className="space-y-2">
-      {payload.results.map((item: RagSearchResultItem) => (
-        <div
-          key={item.chunk_id}
-          className="rounded-lg border border-slate-200 bg-slate-50 p-3"
-        >
-          <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-            <span className="font-medium text-slate-700">{item.source}</span>
-            {item.page != null && <span>第 {item.page} 页</span>}
-            <span className="ml-auto tabular-nums text-brand-600">
-              相关度 {item.score.toFixed(2)}
-            </span>
+      {payload.results.map((item: RagSearchResultItem) => {
+        const relevance = [item.score, item.similarity, item.rrf_score].find(
+          (value) => typeof value === 'number' && Number.isFinite(value),
+        )
+        return (
+          <div
+            key={item.chunk_id}
+            className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+          >
+            <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+              <span className="font-medium text-slate-700">{item.source}</span>
+              {item.page != null && <span>第 {item.page} 页</span>}
+              {relevance != null && (
+                <span className="ml-auto tabular-nums text-brand-600">
+                  相关度 {relevance.toFixed(2)}
+                </span>
+              )}
+            </div>
+            <p className="line-clamp-3 text-xs leading-5 text-slate-600">
+              {item.text}
+            </p>
           </div>
-          <p className="line-clamp-3 text-xs leading-5 text-slate-600">
-            {item.text}
-          </p>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
