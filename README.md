@@ -18,12 +18,12 @@ LearningAssistant 是一个面向个人学习场景的智能知识问答系统�
 ## 主要能力
 
 - 用户注册、登录、资料修改和密码管理。
-- 多会话聊天，同一用户的会话历史相互独立。
+- 多会话聊天，同一用户的会话历史相互独立；新会话使用首次提问自动命名。
 - PDF、Markdown、TXT 等学习资料解析、结构识别、自适应分块与知识库构建。
 - 基于 Milvus 向量检索和 Neo4j 图扩展的用户级 RAG 检索。
 - Working、Semantic、Episodic 三类记忆；模型决定写入，系统按问题主动召回。
 - 基于 MCP 的统一工具发现与调用，RAG 和 Memory 作为共享 MCP 服务运行。
-- 原生 Tool Calling、流式 SSE 输出、运行幂等、事件持久化和中断恢复。
+- 原生 Tool Calling、流式 SSE 输出、心跳保活、运行幂等、事件持久化和浏览器断线恢复。
 - Gather、Select、Structure、Compact 上下文流水线，以及 Archive 和 Session Ledger。
 - 达到上下文预算的 92% 时自动 Compact，也支持用户手动 Compact。
 - 用户级模型、人设和启用工具配置。
@@ -72,7 +72,7 @@ RAG 建库与聊天相互独立。用户可以在未进入对话时上传文件�
 | 数据 | 隔离范围 | 保存位置与用途 |
 |---|---|---|
 | 用户和智能体配置 | `user_id` | MySQL；模型、人设和启用工具 |
-| 会话与聊天记录 | `user_id + session_id` | MySQL；用户可见的提问、最终回答和工具时间线 |
+| 会话与聊天记录 | `user_id + session_id` | MySQL；会话标题、用户可见的提问、最终回答和工具时间线 |
 | Working Memory | `user_id + session_id` | Python 运行时；当前会话的临时状态 |
 | Semantic / Episodic Memory | `user_id` | MySQL 正文、Qdrant 索引、Neo4j 关系；跨会话使用 |
 | RAG 文档 | `user_id + document_id` | 受控文件空间、Milvus 和 Neo4j；默认跨会话检索 |
@@ -192,7 +192,8 @@ http://127.0.0.1:8088
 
 浏览器统一访问 `/api/*`，由 Nginx 转发到 Java 网关；Python 内部接口和数据库服务
 不直接暴露给浏览器。首次进入系统后，按“注册 → 上传资料 → 等待文档就绪 → 新建会话”
-的顺序即可开始使用。
+的顺序即可开始使用。新会话发送第一条消息后，系统会用该问题生成会话标题，最长保留
+100 个字符。
 
 MySQL 初始化脚本只在全新的数据卷上执行。开发阶段若数据库卷来自旧表结构，应按项目
 的开发数据可删除约定重建开发卷，再重新启动；`./deploy/app.sh down` 默认保留数据卷。
@@ -238,6 +239,7 @@ MySQL 初始化脚本只在全新的数据卷上执行。开发阶段若数据�
 | `GET/POST /sessions` | 会话列表与创建 |
 | `GET /sessions/{id}/messages` | 读取用户可见的会话记录 |
 | `POST /sessions/{id}/runs` | 提交消息并接收 SSE 事件流 |
+| `DELETE /sessions/{id}/runs/{request_id}` | 停止当前 Agent 运行 |
 | `POST /sessions/{id}/compact` | 手动压缩当前会话上下文 |
 | `GET/POST /documents` | 文档列表与上传 |
 | `PUT /documents/{id}` | 替换原文件并沿用文档 ID 重建 |
@@ -247,6 +249,10 @@ MySQL 初始化脚本只在全新的数据卷上执行。开发阶段若数据�
 
 `POST /sessions/{id}/runs` 请求包含稳定的 `request_id`、`message_id` 和用户消息。
 相同请求重复提交不会再次执行工具：完成的请求回放已保存事件，执行中的请求返回运行
-状态。连接中断会保留已产生的事件和可能已经发生的工具操作，不自动重试写工具。
+状态。浏览器遇到临时网络错误时会使用同一 `request_id` 自动重连，并按 `event_seq`
+过滤重复事件；刷新页面后，前端也会继续恢复尚未显示完整回答的请求。浏览器连接断开
+不会终止正在后端执行的 Agent，已生成事件仍会写入 MySQL，重连后再回放。用户主动
+停止时才调用取消接口。Python Agent 事件流或服务进程本身中断后，运行会被标记为
+`interrupted`，不会自动重新执行已经发生过的工具调用。
 
 完整接口契约和内部服务说明见 [Backend Interface 文档](backend/Interface/README.md)。
